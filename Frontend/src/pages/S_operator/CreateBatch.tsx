@@ -17,6 +17,7 @@ import { UploadType } from '@/types';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 import { FilePlus2, Layers, BookOpen, UserCheck, MapPin, Database, FolderKanban, Loader2, Hash, FileText } from 'lucide-react';
+import { API_BASE_URL } from '@/config';
 
 interface Project {
     project_id: string;
@@ -71,11 +72,18 @@ const CreateBatch: React.FC = () => {
     const [existingBooks, setExistingBooks] = useState<Array<{ record_name_id: string, record_name: string }>>([]);
     const [isAddingNewBook, setIsAddingNewBook] = useState(false);
     const [selectedExistingBookId, setSelectedExistingBookId] = useState('');
+
     const [bookUploadSummary, setBookUploadSummary] = useState<{
         total_count: number;
         already_uploaded: number;
         remaining: number;
     } | null>(null);
+
+    // Check if partial upload is enabled from settings
+    const [partialUploadEnabled, setPartialUploadEnabled] = useState(() => {
+        const saved = localStorage.getItem('partial_upload_enabled');
+        return saved === 'true';
+    });
 
     const token = localStorage.getItem('qc_token');
     const headers = {
@@ -87,7 +95,7 @@ const CreateBatch: React.FC = () => {
     useEffect(() => {
         const fetchProjects = async () => {
             try {
-                const res = await fetch('http://localhost:8000/operator/assigned-projects', { headers });
+                const res = await fetch(`${API_BASE_URL}/operator/assigned-projects`, { headers });
                 const data = await res.json();
                 setProjects(Array.isArray(data) ? data : []);
             } catch (err) {
@@ -105,7 +113,7 @@ const CreateBatch: React.FC = () => {
         }
         const fetchSources = async () => {
             try {
-                const res = await fetch(`http://localhost:8000/operator/assigned-sources/${formData.projectId}`, { headers });
+                const res = await fetch(`${API_BASE_URL}/operator/assigned-sources/${formData.projectId}`, { headers });
                 const data = await res.json();
                 setSources(Array.isArray(data) ? data : []);
             } catch (err) {
@@ -124,11 +132,11 @@ const CreateBatch: React.FC = () => {
         }
         const fetchLocationsAndTypes = async () => {
             try {
-                const resLoc = await fetch(`http://localhost:8000/operator/assigned-locations/${formData.sourceId}`, { headers });
+                const resLoc = await fetch(`${API_BASE_URL}/operator/assigned-locations/${formData.sourceId}`, { headers });
                 const dataLoc = await resLoc.json();
                 setLocations(Array.isArray(dataLoc) ? dataLoc : []);
 
-                const resType = await fetch(`http://localhost:8000/operator/record-types/${formData.sourceId}`, { headers });
+                const resType = await fetch(`${API_BASE_URL}/operator/record-types/${formData.sourceId}`, { headers });
                 const dataType = await resType.json();
                 setRecordTypes(Array.isArray(dataType) ? dataType : []);
             } catch (err) {
@@ -146,7 +154,7 @@ const CreateBatch: React.FC = () => {
         }
         const fetchOwners = async () => {
             try {
-                const res = await fetch(`http://localhost:8000/operator/assigned-owners/${formData.locationId}`, { headers });
+                const res = await fetch(`${API_BASE_URL}/operator/assigned-owners/${formData.locationId}`, { headers });
                 const data = await res.json();
                 setRecordOwners(Array.isArray(data) ? data : []);
             } catch (err) {
@@ -183,7 +191,7 @@ const CreateBatch: React.FC = () => {
                     record_type_id: formData.recordTypeId
                 });
 
-                const res = await fetch(`http://localhost:8000/operator/existing-books?${params}`, { headers });
+                const res = await fetch(`${API_BASE_URL}/operator/existing-books?${params}`, { headers });
                 const data = await res.json();
                 setExistingBooks(Array.isArray(data) ? data : []);
 
@@ -274,7 +282,7 @@ const CreateBatch: React.FC = () => {
                 uploading_count: formData.uploadType === 'complete' ? parseInt(formData.totalBookImages) : parseInt(formData.uploadingCount)
             };
 
-            const res = await fetch('http://localhost:8000/operator/batches', {
+            const res = await fetch(`${API_BASE_URL}/operator/batches`, {
                 method: 'POST',
                 headers,
                 body: JSON.stringify(payload)
@@ -321,32 +329,34 @@ const CreateBatch: React.FC = () => {
                     <CardContent className="pt-6">
                         <form onSubmit={handleSubmit} className="space-y-6">
 
-                            {/* 1. Upload Type */}
-                            <div className="space-y-3 p-4 rounded-xl bg-primary/5 border border-primary/10">
-                                <Label className="text-sm font-semibold flex items-center gap-2">
-                                    <Layers className="h-4 w-4" /> Upload Type *
-                                </Label>
-                                <RadioGroup
-                                    value={formData.uploadType}
-                                    onValueChange={(v) => setFormData({ ...formData, uploadType: v as UploadType })}
-                                    className="flex flex-wrap gap-4"
-                                >
-                                    <label className={cn(
-                                        "flex flex-1 items-center justify-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all",
-                                        formData.uploadType === 'complete' ? "bg-primary text-primary-foreground border-primary" : "bg-card hover:bg-muted border-transparent"
-                                    )}>
-                                        <RadioGroupItem value="complete" className="sr-only" />
-                                        <span className="font-medium">Complete</span>
-                                    </label>
-                                    <label className={cn(
-                                        "flex flex-1 items-center justify-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all",
-                                        formData.uploadType === 'partial' ? "bg-primary text-primary-foreground border-primary" : "bg-card hover:bg-muted border-transparent"
-                                    )}>
-                                        <RadioGroupItem value="partial" className="sr-only" />
-                                        <span className="font-medium">Partial</span>
-                                    </label>
-                                </RadioGroup>
-                            </div>
+                            {/* 1. Upload Type - Only show if partial upload is enabled */}
+                            {partialUploadEnabled && (
+                                <div className="space-y-3 p-4 rounded-xl bg-primary/5 border border-primary/10">
+                                    <Label className="text-sm font-semibold flex items-center gap-2">
+                                        <Layers className="h-4 w-4" /> Upload Type *
+                                    </Label>
+                                    <RadioGroup
+                                        value={formData.uploadType}
+                                        onValueChange={(v) => setFormData({ ...formData, uploadType: v as UploadType })}
+                                        className="flex flex-wrap gap-4"
+                                    >
+                                        <label className={cn(
+                                            "flex flex-1 items-center justify-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all",
+                                            formData.uploadType === 'complete' ? "bg-primary text-primary-foreground border-primary" : "bg-card hover:bg-muted border-transparent"
+                                        )}>
+                                            <RadioGroupItem value="complete" className="sr-only" />
+                                            <span className="font-medium">Complete</span>
+                                        </label>
+                                        <label className={cn(
+                                            "flex flex-1 items-center justify-center gap-2 p-3 rounded-lg border-2 cursor-pointer transition-all",
+                                            formData.uploadType === 'partial' ? "bg-primary text-primary-foreground border-primary" : "bg-card hover:bg-muted border-transparent"
+                                        )}>
+                                            <RadioGroupItem value="partial" className="sr-only" />
+                                            <span className="font-medium">Partial</span>
+                                        </label>
+                                    </RadioGroup>
+                                </div>
+                            )}
 
                             {/* Hierarchy Selection */}
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -447,7 +457,7 @@ const CreateBatch: React.FC = () => {
 
                                                         // Fetch upload summary for this book
                                                         try {
-                                                            const res = await fetch(`http://localhost:8000/operator/book-upload-summary/${book.record_name_id}`, { headers });
+                                                            const res = await fetch(`${API_BASE_URL}/operator/book-upload-summary/${book.record_name_id}`, { headers });
                                                             const summary = await res.json();
                                                             setBookUploadSummary(summary);
 
@@ -499,16 +509,22 @@ const CreateBatch: React.FC = () => {
                                     ) : (
                                         // Show text input for new book or Complete upload
                                         <>
-                                            <Input
-                                                className="h-11 uppercase"
-                                                placeholder="e.g. MARRIAGE REGISTER 1945"
-                                                value={formData.bookName}
-                                                onChange={(e) => {
-                                                    const value = e.target.value.toUpperCase();
-                                                    const sanitized = value.replace(/[^A-Z0-9\s-]/g, '');
-                                                    setFormData({ ...formData, bookName: sanitized });
-                                                }}
-                                            />
+                                            <div className="relative">
+                                                <Input
+                                                    className="h-11 uppercase pr-16"
+                                                    placeholder="e.g. MARRIAGE REGISTER 1945"
+                                                    value={formData.bookName}
+                                                    maxLength={100}
+                                                    onChange={(e) => {
+                                                        const value = e.target.value.toUpperCase();
+                                                        const sanitized = value.replace(/[^A-Z0-9\s-]/g, '');
+                                                        setFormData({ ...formData, bookName: sanitized });
+                                                    }}
+                                                />
+                                                <div className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-muted-foreground bg-muted/50 px-2 py-1 rounded border">
+                                                    {formData.bookName.length}/100
+                                                </div>
+                                            </div>
                                             <p className="text-xs text-muted-foreground">Only letters, numbers, spaces, and hyphens (-) allowed</p>
                                             {formData.uploadType === 'partial' && isAddingNewBook && (
                                                 <Button

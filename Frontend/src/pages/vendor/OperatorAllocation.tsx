@@ -3,6 +3,7 @@ import PageHeader from '@/components/common/PageHeader';
 import DataTable from '@/components/common/DataTable';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import {
     Select,
@@ -11,6 +12,8 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select';
+import { formatError, cn } from '@/lib/utils';
+import { Switch } from '@/components/ui/switch';
 import {
     Dialog,
     DialogContent,
@@ -20,6 +23,7 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
+import { API_BASE_URL } from '@/config';
 import {
     GitBranch,
     UserCheck,
@@ -64,7 +68,7 @@ interface OperatorAllocationHistory {
 }
 
 const OperatorAllocation: React.FC = () => {
-    const { user: currentUser } = useAuth();
+    const { user: currentUser, apiFetch } = useAuth();
     const { toast } = useToast();
 
     const [availableAllocations, setAvailableAllocations] = useState<ResourceAllocation[]>([]);
@@ -73,6 +77,8 @@ const OperatorAllocation: React.FC = () => {
     const [isLoading, setIsLoading] = useState(true);
     const [isDialogOpen, setIsDialogOpen] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
+
+    const [editingAllocation, setEditingAllocation] = useState<OperatorAllocationHistory | null>(null);
 
     // Form State
     const [selectedSource, setSelectedSource] = useState<string>('');
@@ -83,22 +89,17 @@ const OperatorAllocation: React.FC = () => {
     const fetchData = async () => {
         try {
             setIsLoading(true);
-            const token = localStorage.getItem('qc_token');
-            const headers = { 'Authorization': `Bearer ${token}` };
 
             // 1. Fetch resources available to this vendor
-            const resAlloc = await fetch('http://localhost:8000/vendor/my-allocations', { headers });
-            const available = await resAlloc.json();
+            const available = await apiFetch(`${API_BASE_URL}/vendor/my-allocations`).then(r => r.json());
             setAvailableAllocations(Array.isArray(available) ? available : []);
 
             // 2. Fetch history of operator allocations
-            const resHist = await fetch('http://localhost:8000/vendor/operator-allocations', { headers });
-            const history = await resHist.json();
-            setOperatorAllocations(Array.isArray(history) ? history : []);
+            const history = await apiFetch(`${API_BASE_URL}/vendor/operator-allocations`).then(r => r.json());
+            setOperatorAllocations(Array.isArray(history) ? history.map((h: any) => ({ ...h, id: h.id || h.scanning_operator_allocation_id })) : []);
 
             // 3. Fetch vendor's operators
-            const resOps = await fetch('http://localhost:8000/admin/users', { headers });
-            const allUsers = await resOps.json();
+            const allUsers = await apiFetch(`${API_BASE_URL}/admin/users`).then(r => r.json());
             setOperators(allUsers.filter((u: any) => u.user_role === 'Scanning_Operator' && u.created_by === currentUser?.id));
 
         } catch (error) {
@@ -136,12 +137,14 @@ const OperatorAllocation: React.FC = () => {
 
         try {
             setIsSubmitting(true);
-            const token = localStorage.getItem('qc_token');
-            const response = await fetch('http://localhost:8000/vendor/operator-allocations', {
-                method: 'POST',
+            const url = editingAllocation
+                ? `${API_BASE_URL}/vendor/operator-allocations/${editingAllocation.id}`
+                : `${API_BASE_URL}/vendor/operator-allocations`;
+
+            const response = await apiFetch(url, {
+                method: editingAllocation ? 'PUT' : 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
                 },
                 body: JSON.stringify({
                     vendor_allocation_id: currentAllocation.vendor_allocation_id,
@@ -150,7 +153,7 @@ const OperatorAllocation: React.FC = () => {
             });
 
             if (response.ok) {
-                toast({ title: 'Success', description: 'Resource allocated to operator successfully' });
+                toast({ title: 'Success', description: `Resource ${editingAllocation ? 'updated' : 'allocated'} to operator successfully` });
                 setIsDialogOpen(false);
                 fetchData();
                 // Clear form
@@ -158,6 +161,7 @@ const OperatorAllocation: React.FC = () => {
                 setSelectedLocation('');
                 setSelectedOwner('');
                 setSelectedOperator('');
+                setEditingAllocation(null);
             } else {
                 const error = await response.json();
                 toast({ title: 'Allocation Failed', description: error.detail || 'Internal server error', variant: 'destructive' });
@@ -169,22 +173,40 @@ const OperatorAllocation: React.FC = () => {
         }
     };
 
-    const handleDelete = async (id: string) => {
-        if (!confirm('Are you sure you want to revoke this allocation?')) return;
+    const handleEdit = (alloc: OperatorAllocationHistory) => {
+        setEditingAllocation(alloc);
+        setSelectedSource(alloc.source_id);
+        setSelectedLocation(alloc.location_id);
+        setSelectedOwner(alloc.record_owner_id);
+        setSelectedOperator(alloc.operator_id);
+        setIsDialogOpen(true);
+    };
+
+    const handleToggleStatus = async (alloc: OperatorAllocationHistory) => {
         try {
-            const token = localStorage.getItem('qc_token');
-            const response = await fetch(`http://localhost:8000/vendor/operator-allocations/${id}`, {
-                method: 'DELETE',
-                headers: { 'Authorization': `Bearer ${token}` }
+            const response = await apiFetch(`${API_BASE_URL}/vendor/operator-allocations/${alloc.id}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ is_active: !alloc.is_active })
             });
             if (response.ok) {
-                toast({ title: 'Allocation Revoked', description: 'The operator no longer has access to this resource.' });
-                fetchData();
+                const updated = await response.json();
+                toast({ title: 'Success', description: `Allocation ${updated.is_active ? 'enabled' : 'disabled'}` });
+
+                // Optimistic update
+                setOperatorAllocations(prev => prev.map(a =>
+                    a.id === alloc.id ? { ...a, is_active: updated.is_active } : a
+                ));
+            } else {
+                toast({ title: 'Error', description: 'Failed to update status', variant: 'destructive' });
             }
         } catch (error) {
-            toast({ title: 'Error', description: 'Revocation failed', variant: 'destructive' });
+            toast({ title: 'Error', description: 'Toggle failed', variant: 'destructive' });
         }
     };
+
 
     const columns = [
         {
@@ -197,12 +219,34 @@ const OperatorAllocation: React.FC = () => {
         { key: 'location_name', header: 'Location' },
         { key: 'record_owner_name', header: 'Record Owner' },
         {
+            key: 'is_active',
+            header: 'Status',
+            render: (val: boolean, item: OperatorAllocationHistory) => (
+                <div className="flex items-center gap-2">
+                    <Switch
+                        checked={val}
+                        onCheckedChange={() => handleToggleStatus(item)}
+                    />
+                    <Badge variant={val ? "default" : "secondary"} className={val ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-800"}>
+                        {val ? 'Enabled' : 'Disabled'}
+                    </Badge>
+                </div>
+            )
+        },
+        {
             key: 'actions',
             header: 'Actions',
             render: (_: any, item: OperatorAllocationHistory) => (
-                <Button variant="ghost" size="icon" onClick={() => handleDelete(item.id)}>
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                </Button>
+                <div className="flex gap-2">
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleEdit(item)}
+                        className="h-8 text-[10px] font-bold bg-emerald-500 text-white hover:bg-emerald-600 hover:text-white"
+                    >
+                        EDIT
+                    </Button>
+                </div>
             )
         }
     ];
@@ -228,12 +272,12 @@ const OperatorAllocation: React.FC = () => {
                 />
             )}
 
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+            <Dialog open={isDialogOpen} onOpenChange={(open) => { setIsDialogOpen(open); if (!open) setEditingAllocation(null); }}>
                 <DialogContent className="max-w-2xl">
                     <DialogHeader>
-                        <DialogTitle>Create New Allocation</DialogTitle>
+                        <DialogTitle>{editingAllocation ? 'Update Allocation' : 'Create New Allocation'}</DialogTitle>
                         <DialogDescription>
-                            Select a resource stack from your available pool and assign it to an operator.
+                            {editingAllocation ? 'Modify the operator assignment or resource stack.' : 'Select a resource stack from your available pool and assign it to an operator.'}
                         </DialogDescription>
                     </DialogHeader>
 
@@ -314,7 +358,7 @@ const OperatorAllocation: React.FC = () => {
                             disabled={!currentAllocation || !selectedOperator || isSubmitting}
                             className="min-w-[120px]"
                         >
-                            {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Allocate Resource'}
+                            {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : (editingAllocation ? 'Update Allocation' : 'Allocate Resource')}
                         </Button>
                     </DialogFooter>
                 </DialogContent>

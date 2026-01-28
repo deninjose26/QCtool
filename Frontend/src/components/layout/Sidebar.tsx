@@ -9,6 +9,8 @@ import {
   UserCog, History, Image, RefreshCw, PlusCircle, ClipboardList
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import defaultAvatar from '@/assets/default-avatar.png';
 import {
   Tooltip,
   TooltipContent,
@@ -74,19 +76,20 @@ const Sidebar: React.FC<SidebarProps> = ({ open, onClose }) => {
         </div>
 
         {/* User Info */}
-        <div className={cn("px-4 py-4 border-b border-sidebar-border overflow-hidden", !open && "px-2")}>
-          <div className={cn("flex items-center gap-3", !open && "justify-center")}>
-            <div className="h-10 w-10 rounded-full bg-sidebar-accent flex-shrink-0 flex items-center justify-center">
-              <span className="text-sidebar-accent-foreground font-semibold">
+        <div className={cn("px-4 py-6 border-b border-sidebar-border overflow-hidden bg-sidebar/50", !open && "px-2 py-4")}>
+          <div className={cn("flex items-center gap-4", !open && "justify-center")}>
+            <Avatar className={cn("border-2 border-white/10 shadow-sm", open ? "h-12 w-12" : "h-10 w-10")}>
+              <AvatarImage src={user?.avatar || defaultAvatar} className="object-cover" />
+              <AvatarFallback className="bg-sidebar-accent text-sidebar-accent-foreground font-bold">
                 {user?.name.charAt(0)}
-              </span>
-            </div>
+              </AvatarFallback>
+            </Avatar>
             {open && (
               <div className="flex-1 min-w-0 transition-all duration-300">
-                <p className="text-base font-medium text-sidebar-foreground truncate">
+                <p className="text-sm font-bold text-white uppercase tracking-wider truncate">
                   {user?.name}
                 </p>
-                <p className="text-xs text-sidebar-foreground/60 truncate">
+                <p className="text-xs text-sidebar-foreground/60 truncate font-medium">
                   {user ? roleLabels[user.role] : ''}
                 </p>
               </div>
@@ -95,8 +98,8 @@ const Sidebar: React.FC<SidebarProps> = ({ open, onClose }) => {
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 overflow-y-auto py-4 px-3 overflow-x-hidden">
-          <ul className="space-y-1">
+        <nav className="flex-1 overflow-y-auto py-6 px-3 overflow-x-hidden custom-scrollbar">
+          <ul className="space-y-1.5">
             {navItems.map((item) => {
               const IconComponent = iconMap[item.icon] || Circle;
               const isActive = location.pathname === item.href;
@@ -108,25 +111,27 @@ const Sidebar: React.FC<SidebarProps> = ({ open, onClose }) => {
                       <NavLink
                         to={item.href}
                         className={cn(
-                          'flex items-center gap-3 px-3 py-2.5 rounded-lg text-base font-medium transition-all group',
-                          'hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+                          'flex items-center gap-3 px-3 py-3 rounded-lg text-sm font-semibold transition-all group relative overflow-hidden',
                           isActive
-                            ? 'bg-sidebar-accent text-sidebar-primary'
-                            : 'text-sidebar-foreground/80',
+                            ? 'bg-primary/20 text-blue-400 shadow-sm'
+                            : 'text-gray-400 hover:bg-white/5 hover:text-white',
                           !open && "justify-center px-0 h-10 w-10 mx-auto"
                         )}
                       >
-                        <IconComponent className={cn("h-5 w-5 flex-shrink-0 transition-all", isActive ? "text-sidebar-primary" : "group-hover:text-sidebar-accent-foreground")} />
-                        {open && <span className="truncate">{item.title}</span>}
+                        {isActive && (
+                          <div className="absolute left-0 top-0 bottom-0 w-1 bg-blue-500 rounded-r-full" />
+                        )}
+                        <IconComponent className={cn("h-5 w-5 flex-shrink-0 transition-all", isActive ? "text-blue-400" : "text-gray-400 group-hover:text-white")} />
+                        {open && <span className="truncate tracking-wide">{item.title}</span>}
                         {open && item.badge && (
-                          <span className="ml-auto bg-sidebar-primary text-sidebar-primary-foreground text-xs px-2 py-0.5 rounded-full">
+                          <span className="ml-auto bg-blue-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">
                             {item.badge}
                           </span>
                         )}
                       </NavLink>
                     </TooltipTrigger>
                     {!open && (
-                      <TooltipContent side="right" className="font-medium">
+                      <TooltipContent side="right" className="font-medium bg-sidebar text-white border-sidebar-border">
                         {item.title}
                       </TooltipContent>
                     )}

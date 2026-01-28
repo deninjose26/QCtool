@@ -54,10 +54,10 @@ const Landing: React.FC = () => {
 
   const roles = [
     { name: 'Super Admin', description: 'Full system access and user management' },
-    { name: 'Upload Supervisor', description: 'Vendor and allocation management' },
+    { name: 'Upload Manager', description: 'Vendor and allocation management' },
     { name: 'Vendor', description: 'Operator management and batch oversight' },
     { name: 'Scanning Operator', description: 'Batch creation and image upload' },
-    { name: 'QC Supervisor', description: 'QC team and task allocation' },
+    { name: 'QC Manager', description: 'QC team and task allocation' },
     { name: 'QC User', description: 'Image review and quality control' },
   ];
 
@@ -114,9 +114,11 @@ const Landing: React.FC = () => {
                   Start Now <ArrowRight className="h-5 w-5" />
                 </Button>
               </Link>
-              <Button size="lg" variant="outline" className="border-primary-foreground/30 bg-primary-foreground/5 backdrop-blur-sm text-primary-foreground hover:bg-primary-foreground/10 px-10 py-6 text-lg">
-                View Documentation
-              </Button>
+              <Link to="/documentation">
+                <Button size="lg" variant="outline" className="border-primary-foreground/30 bg-primary-foreground/5 backdrop-blur-sm text-primary-foreground hover:bg-primary-foreground/10 px-10 py-6 text-lg">
+                  View Documentation
+                </Button>
+              </Link>
             </div>
           </div>
 
@@ -235,7 +237,7 @@ const Landing: React.FC = () => {
               <ul className="space-y-2 text-sm text-muted-foreground">
                 <li><a href="#" className="hover:text-foreground transition-colors">Features</a></li>
                 <li><a href="#" className="hover:text-foreground transition-colors">Pricing</a></li>
-                <li><a href="#" className="hover:text-foreground transition-colors">Documentation</a></li>
+                <li><Link to="/documentation" className="hover:text-foreground transition-colors">Documentation</Link></li>
               </ul>
             </div>
             <div>

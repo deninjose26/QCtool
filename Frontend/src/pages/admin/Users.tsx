@@ -26,6 +26,7 @@ import { Edit, Trash2, Loader2, Eye, EyeOff } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { formatError } from '@/lib/utils';
+import { formatToLocalTime } from '@/utils/dateUtils';
 
 const backendRoleMap: Record<string, string> = {
   super_admin: 'SuperAdmin',
@@ -47,7 +48,7 @@ const Users: React.FC = () => {
     email: '',
     username: '',
     password: '',
-    role: 'upload_supervisor' as UserRole
+    role: 'Upload_Supervisor' as UserRole
   });
   const [showPassword, setShowPassword] = useState(false);
   const { toast } = useToast();
@@ -82,11 +83,11 @@ const Users: React.FC = () => {
     fetchUsers();
   }, []);
 
-  const creatableRoles: UserRole[] = ['upload_supervisor', 'qc_supervisor', 'vendor', 'scanning_operator', 'qc_user'];
+  const creatableRoles: UserRole[] = ['SuperAdmin', 'Upload_Supervisor', 'QC_Supervisor', 'Vendor', 'QC_User'];
 
   const handleCreate = () => {
     setEditingUser(null);
-    setFormData({ name: '', email: '', username: '', password: '', role: 'upload_supervisor' });
+    setFormData({ name: '', email: '', username: '', password: '', role: 'Upload_Supervisor' });
     setShowPassword(false);
     setIsDialogOpen(true);
   };
@@ -191,12 +192,12 @@ const Users: React.FC = () => {
 
   const getRoleBadgeColor = (role: UserRole): string => {
     const colors: Record<UserRole, string> = {
-      super_admin: 'bg-primary/10 text-primary border-primary/20',
-      upload_supervisor: 'bg-info/10 text-info border-info/20',
-      vendor: 'bg-warning/10 text-warning border-warning/20',
-      scanning_operator: 'bg-accent/10 text-accent border-accent/20',
-      qc_supervisor: 'bg-success/10 text-success border-success/20',
-      qc_user: 'bg-muted text-muted-foreground border-muted',
+      SuperAdmin: 'bg-primary/10 text-primary border-primary/20',
+      Upload_Supervisor: 'bg-info/10 text-info border-info/20',
+      Vendor: 'bg-warning/10 text-warning border-warning/20',
+      Scanning_Operator: 'bg-accent/10 text-accent border-accent/20',
+      QC_Supervisor: 'bg-success/10 text-success border-success/20',
+      QC_User: 'bg-muted text-muted-foreground border-muted',
     };
     return colors[role] || 'bg-muted text-muted-foreground';
   };
@@ -225,7 +226,7 @@ const Users: React.FC = () => {
     {
       key: 'createdAt',
       header: 'Created',
-      render: (value: string) => new Date(value).toLocaleDateString()
+      render: (value: string) => formatToLocalTime(value)
     },
     {
       key: 'actions',
@@ -235,7 +236,7 @@ const Users: React.FC = () => {
           <Button variant="ghost" size="icon" onClick={() => handleEdit(item)}>
             <Edit className="h-4 w-4" />
           </Button>
-          {item.id !== currentUser?.id && item.role !== 'super_admin' && (
+          {item.id !== currentUser?.id && item.role !== 'SuperAdmin' && (
             <Button variant="ghost" size="icon" onClick={() => handleDelete(item.id)}>
               <Trash2 className="h-4 w-4 text-destructive" />
             </Button>

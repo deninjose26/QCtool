@@ -2,15 +2,15 @@ import React from 'react';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 
-type StatusType = 'pending' | 'approved' | 'rejected' | 'active' | 'inactive' | 
-  'uploaded' | 'qc_pending' | 'qc_in_progress' | 'completed' | 'in_progress' | 'accepted';
+type StatusType = 'pending' | 'approved' | 'rejected' | 'active' | 'inactive' | 'allocated' |
+  'uploaded' | 'qc_pending' | 'qc_in_progress' | 'completed' | 'in_progress' | 'accepted' | 'Allocated';
 
 interface StatusBadgeProps {
-  status: StatusType;
+  status: string;
   className?: string;
 }
 
-const statusConfig: Record<StatusType, { label: string; className: string }> = {
+const statusConfig: Record<string, { label: string; className: string }> = {
   pending: { label: 'Pending', className: 'bg-warning/10 text-warning border-warning/20' },
   approved: { label: 'Approved', className: 'bg-success/10 text-success border-success/20' },
   rejected: { label: 'Rejected', className: 'bg-destructive/10 text-destructive border-destructive/20' },
@@ -22,14 +22,16 @@ const statusConfig: Record<StatusType, { label: string; className: string }> = {
   completed: { label: 'Completed', className: 'bg-success/10 text-success border-success/20' },
   in_progress: { label: 'In Progress', className: 'bg-info/10 text-info border-info/20' },
   accepted: { label: 'Accepted', className: 'bg-success/10 text-success border-success/20' },
+  allocated: { label: 'Allocated', className: 'bg-indigo-100 text-indigo-700 border-indigo-200' },
 };
 
 const StatusBadge: React.FC<StatusBadgeProps> = ({ status, className }) => {
-  const config = statusConfig[status] || { label: status, className: 'bg-muted text-muted-foreground' };
+  const normalizedStatus = status?.toLowerCase() || '';
+  const config = statusConfig[normalizedStatus] || { label: status, className: 'bg-muted text-muted-foreground' };
 
   return (
-    <Badge 
-      variant="outline" 
+    <Badge
+      variant="outline"
       className={cn('font-medium', config.className, className)}
     >
       {config.label}

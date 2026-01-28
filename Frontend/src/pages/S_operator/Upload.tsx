@@ -1,3 +1,4 @@
+import { useNavigate } from 'react-router-dom';
 import React, { useState, useEffect, useRef } from 'react';
 import PageHeader from '@/components/common/PageHeader';
 import DataTable from '@/components/common/DataTable';
@@ -5,10 +6,23 @@ import StatusBadge from '@/components/common/StatusBadge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
-import { Upload as UploadIcon, FolderOpen, CheckCircle, Loader2, ListFilter } from 'lucide-react';
+import { Upload as UploadIcon, FolderOpen, CheckCircle, Loader2, ListFilter, Files, Info, Wifi, WifiOff, Pause, Play, Eye } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
+import { API_BASE_URL } from '@/config';
+import { storeFilesInQueue, getPendingFiles, clearBatch, getBatchStats } from '@/utils/uploadDB';
+import { UploadManager, syncWithServer } from '@/utils/uploadManager';
+import { useNetworkStatus } from '@/hooks/useNetworkStatus';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription,
+} from '@/components/ui/dialog';
+import { Separator } from '@/components/ui/separator';
 
 interface OperatorBatch {
   id: string; // Required by DataTable (mapped from batch_uid)
@@ -25,30 +39,77 @@ interface OperatorBatch {
   completed_count: number; // Actual uploaded
   status: 'pending' | 'uploading' | 'uploaded';
   created_date: string;
+  is_reupload: boolean;
 }
 
 const Upload: React.FC = () => {
   const [batches, setBatches] = useState<OperatorBatch[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState('all');
+  const [isUploading, setIsUploading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Dialog State
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [selectedBatch, setSelectedBatch] = useState<OperatorBatch | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+
+  // Upload Progress State
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [currentFileName, setCurrentFileName] = useState('');
+  const [filesCompleted, setFilesCompleted] = useState(0);
+  const [isPaused, setIsPaused] = useState(false);
+  const [queueCount, setQueueCount] = useState(0);
+  const [queuedBatchUids, setQueuedBatchUids] = useState<string[]>([]);
+  const [activeUploadUid, setActiveUploadUid] = useState<string | null>(null);
+
   const { toast } = useToast();
+  const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadManagerRef = useRef<UploadManager | null>(null);
 
   const token = localStorage.getItem('qc_token');
   const headers = { 'Authorization': `Bearer ${token}` };
+  const { isOnline, wasOffline } = useNetworkStatus();
 
   const fetchBatches = async () => {
     try {
       setIsLoading(true);
-      const res = await fetch('http://localhost:8000/operator/batches', { headers });
+
+      // Check if token exists
+      if (!token) {
+        toast({
+          title: 'Authentication Required',
+          description: 'Please log in to continue',
+          variant: 'destructive'
+        });
+        window.location.href = '/login';
+        return;
+      }
+
+      const res = await fetch(`${API_BASE_URL}/operator/batches`, { headers });
+
+      // Handle 401 Unauthorized
+      if (res.status === 401) {
+        toast({
+          title: 'Session Expired',
+          description: 'Please log in again',
+          variant: 'destructive'
+        });
+        localStorage.removeItem('qc_token');
+        window.location.href = '/login';
+        return;
+      }
+
       if (!res.ok) throw new Error('Failed to fetch batches');
+
       const data = await res.json();
       const mappedData = data.map((item: any) => ({
         ...item,
         id: item.batch_uid
       }));
       setBatches(mappedData);
+      await updateQueueStatus();
     } catch (err) {
       console.error(err);
       toast({ title: 'Error', description: 'Failed to load batches', variant: 'destructive' });
@@ -57,12 +118,172 @@ const Upload: React.FC = () => {
     }
   };
 
+  const updateQueueStatus = async () => {
+    try {
+      const { getQueueCount, getBatchesWithPendingUploads } = await import('@/utils/uploadDB');
+      const count = await getQueueCount();
+      const uids = await getBatchesWithPendingUploads();
+      setQueueCount(count);
+      setQueuedBatchUids(uids);
+    } catch (error) {
+      console.error('Error updating queue status:', error);
+    }
+  };
+
+  // Check for pending uploads on page load and auto-resume multi-batch queue
+  const checkAndResumePendingUploads = async () => {
+    try {
+      if (!token || isUploading) return;
+
+      const { getBatchesWithPendingUploads, getActiveBatch, getNextBatchInQueue } = await import('@/utils/uploadDB');
+
+      // 1. Check if there's an active (interrupted) batch
+      let activeBatchInfo = await getActiveBatch();
+
+      // 2. If no active but there are queued, get the next one
+      if (!activeBatchInfo) {
+        activeBatchInfo = await getNextBatchInQueue() as any;
+      }
+
+      if (!activeBatchInfo) return;
+
+      // 3. Find the batch in our current list (for UI state)
+      const batch = batches.find(b => b.batch_uid === activeBatchInfo?.batch_uid);
+      if (!batch) return;
+
+      processNextBatchInQueue();
+
+    } catch (error) {
+      console.error('Error checking pending uploads:', error);
+    }
+  };
+
+  /**
+   * Master Queue Controller: Processes batches one-by-one
+   */
+  const processNextBatchInQueue = async () => {
+    if (isUploading || !token) return;
+
+    const { getActiveBatch, getNextBatchInQueue, updateBatchStatus, getPendingFiles, clearBatch, removeBatchFromQueue } = await import('@/utils/uploadDB');
+
+    // 1. Get current or next batch
+    let batchToProcess = await getActiveBatch();
+    if (!batchToProcess) {
+      batchToProcess = await getNextBatchInQueue();
+    }
+
+    if (!batchToProcess) {
+      setIsUploading(false);
+      setActiveUploadUid(null);
+      return;
+    }
+
+    const batchUid = batchToProcess.batch_uid;
+    const batchData = batches.find(b => b.batch_uid === batchUid);
+
+    try {
+      setIsUploading(true);
+      setActiveUploadUid(batchUid);
+      await updateBatchStatus(batchUid, 'uploading');
+      await updateQueueStatus();
+
+      // Sync with server
+      const uploadedFiles = await syncWithServer(batchUid, token);
+      const pendingFiles = await getPendingFiles(batchUid);
+      const filesToUpload = pendingFiles.filter(f => !uploadedFiles.includes(f.file_name));
+
+      if (filesToUpload.length === 0) {
+        await clearBatch(batchUid);
+        await removeBatchFromQueue(batchUid);
+        await updateQueueStatus();
+        fetchBatches();
+        setIsUploading(false);
+        processNextBatchInQueue(); // Move to next immediately
+        return;
+      }
+
+      // Initialize upload manager
+      const uploadManager = new UploadManager(token);
+      uploadManagerRef.current = uploadManager;
+
+      uploadManager.processUploadQueue(
+        batchUid,
+        filesToUpload,
+        // On file progress
+        (fileProgress) => {
+          setCurrentFileName(fileProgress.fileName);
+          setUploadProgress(fileProgress.progress);
+        },
+        // On batch progress
+        (batchProgress) => {
+          const currentCount = uploadedFiles.length + batchProgress.completed;
+          setFilesCompleted(currentCount);
+
+          // Update table list in real-time
+          setBatches(prev => prev.map(b =>
+            b.batch_uid === batchUid
+              ? { ...b, completed_count: currentCount, status: 'uploading' }
+              : b
+          ));
+
+          if (batchProgress.currentFile) {
+            setCurrentFileName(batchProgress.currentFile);
+          }
+        },
+        // On complete
+        async () => {
+          await clearBatch(batchUid);
+          await removeBatchFromQueue(batchUid);
+          await updateQueueStatus();
+          setActiveUploadUid(null);
+
+          toast({
+            title: 'Batch Complete',
+            description: `Successfully uploaded batch ${batchData?.batch_id || batchUid}`,
+          });
+
+          setIsUploading(false);
+          fetchBatches();
+
+          // CRITICAL: Trigger next batch in queue
+          setTimeout(() => processNextBatchInQueue(), 1000);
+        },
+        // On error
+        (error) => {
+          console.error('Queue processing error:', error);
+          toast({
+            title: 'Upload Error',
+            description: `Batch ${batchData?.batch_id}: ${error.message}`,
+            variant: 'destructive'
+          });
+          setIsUploading(false);
+        }
+      );
+
+    } catch (error) {
+      console.error('Master queue error:', error);
+      setIsUploading(false);
+    }
+  };
+
   useEffect(() => {
     fetchBatches();
   }, []);
 
-  const handleUploadClick = (batchId: string) => {
-    setActiveBatchId(batchId);
+  // Check for pending uploads after batches are loaded
+  useEffect(() => {
+    if (batches.length > 0 && !isUploading) {
+      checkAndResumePendingUploads();
+    }
+  }, [batches]);
+
+  const handleUploadClick = (batch: OperatorBatch) => {
+    setSelectedBatch(batch);
+    setSelectedFiles([]);
+    setIsDialogOpen(true);
+  };
+
+  const handleBrowseClick = () => {
     if (fileInputRef.current) {
       fileInputRef.current.click();
     }
@@ -70,52 +291,166 @@ const Upload: React.FC = () => {
 
   const handleFolderSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (!files || files.length === 0 || !activeBatchId) return;
+    if (!files || files.length === 0) return;
 
-    // Filter for images only
+    // Filter for TIFF images only
     const imageFiles = Array.from(files).filter(file =>
-      ['image/jpeg', 'image/png', 'image/tiff', 'image/jpg'].includes(file.type) ||
-      file.name.toLowerCase().endsWith('.jpg') ||
-      file.name.toLowerCase().endsWith('.jpeg') ||
-      file.name.toLowerCase().endsWith('.png') ||
       file.name.toLowerCase().endsWith('.tif') ||
       file.name.toLowerCase().endsWith('.tiff')
     );
 
     if (imageFiles.length === 0) {
-      toast({ title: 'Invalid Folder', description: 'No valid images found in the selected folder.', variant: 'destructive' });
+      toast({
+        title: 'No TIFF Images',
+        description: 'No valid TIFF (.tif, .tiff) images found in the selected folder. Only TIFF format is allowed.',
+        variant: 'destructive'
+      });
       return;
     }
 
-    const currentBatch = batches.find(b => b.batch_id === activeBatchId);
-    if (currentBatch && imageFiles.length > currentBatch.target_count) {
+    if (selectedBatch && imageFiles.length !== selectedBatch.target_count) {
       toast({
         title: 'Validation Error',
-        description: `Selected folder has ${imageFiles.length} images, which exceeds the required ${currentBatch.target_count} images for this batch.`,
+        description: `Selected folder has ${imageFiles.length} TIFF images, but exactly ${selectedBatch.target_count} images are required for this batch.`,
         variant: 'destructive',
       });
       return;
     }
 
-    toast({
-      title: 'Folder Selected',
-      description: `Found ${imageFiles.length} images. Starting upload process...`,
-    });
-
-    // TODO: Implement actual multipart upload to backend
-    console.log('Images to upload:', imageFiles);
-
-    // UI Simulation for now
-    setBatches(prev => prev.map(b =>
-      b.batch_id === activeBatchId
-        ? { ...b, completed_count: imageFiles.length, status: 'uploaded' as const }
-        : b
-    ));
-
-    setActiveBatchId(null);
-    // Clear input
+    setSelectedFiles(imageFiles);
+    // Clear input so same folder can be re-selected if needed
     e.target.value = '';
   };
+
+  const handleStartUpload = async () => {
+    if (!selectedBatch || selectedFiles.length === 0 || !token) return;
+
+    try {
+      setIsSubmitting(true);
+      // Check max queue limit (5 for Normal, 10 for Re-upload)
+      const { addToBatchQueue, getQueueCount, getActiveBatch, getNextBatchInQueue } = await import('@/utils/uploadDB');
+
+      const currentQueueSize = await getQueueCount();
+      const maxLimit = selectedBatch.is_reupload ? 10 : 5;
+
+      if (currentQueueSize >= maxLimit) {
+        toast({
+          title: 'Queue Full',
+          description: `You can only queue up to ${maxLimit} ${selectedBatch.is_reupload ? 'Re-upload' : ''} batches at a time.`,
+          variant: 'destructive'
+        });
+        return;
+      }
+
+      // 🔍 TYPE CHECK: Restrict Mixing Re-upload and Normal batches
+      if (currentQueueSize > 0) {
+        let referenceBatch = await getActiveBatch();
+        if (!referenceBatch) {
+          referenceBatch = await getNextBatchInQueue();
+        }
+
+        if (referenceBatch && referenceBatch.is_reupload !== selectedBatch.is_reupload) {
+          toast({
+            title: 'Queue Limitation',
+            description: `You cannot mix ${selectedBatch.is_reupload ? 'Re-upload' : 'Normal'} batches with ${referenceBatch.is_reupload ? 'Re-upload' : 'Normal'} batches currently in queue.`,
+            variant: 'destructive'
+          });
+          return;
+        }
+      }
+
+      // Final check for non-TIFF files (extra safety)
+      const nonTiffFiles = selectedFiles.filter(f =>
+        !f.name.toLowerCase().endsWith('.tif') && !f.name.toLowerCase().endsWith('.tiff')
+      );
+      if (nonTiffFiles.length > 0) {
+        toast({
+          title: 'Invalid File Format',
+          description: `Batch contains ${nonTiffFiles.length} non-TIFF files. Only .tif or .tiff files are accepted.`,
+          variant: 'destructive'
+        });
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Store files in IndexedDB
+      await storeFilesInQueue(selectedBatch.batch_uid, selectedFiles);
+
+      // Add batch to metadata queue
+      await addToBatchQueue(selectedBatch.batch_uid, selectedFiles.length, selectedBatch.is_reupload);
+      await updateQueueStatus();
+
+      toast({
+        title: 'Batch Queued',
+        description: `Added "${selectedBatch.batch_id}" to the upload queue.`,
+      });
+
+      setIsDialogOpen(false);
+      setSelectedBatch(null);
+      fetchBatches();
+
+      // Trigger the queue processor if not already running
+      if (!isUploading) {
+        processNextBatchInQueue();
+      }
+
+    } catch (err) {
+      console.error(err);
+      toast({
+        title: 'Queueing Failed',
+        description: err instanceof Error ? err.message : 'An error occurred',
+        variant: 'destructive'
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handlePauseResume = () => {
+    if (!uploadManagerRef.current) return;
+
+    if (isPaused) {
+      uploadManagerRef.current.resume();
+      setIsPaused(false);
+      toast({ title: 'Upload Resumed', description: 'Continuing upload...' });
+
+      // Re-trigger the processing loop
+      processNextBatchInQueue();
+    } else {
+      uploadManagerRef.current.pause();
+      setIsPaused(true);
+      toast({ title: 'Upload Paused', description: 'Upload paused. You can resume anytime.' });
+    }
+  };
+
+  // Auto-pause on network loss
+  useEffect(() => {
+    if (!isOnline && isUploading && uploadManagerRef.current) {
+      uploadManagerRef.current.pause();
+      setIsPaused(true);
+      toast({
+        title: 'Network Lost',
+        description: 'Upload paused. Will resume when connection is restored.',
+        variant: 'destructive'
+      });
+    }
+  }, [isOnline, isUploading]);
+
+  // Auto-resume on network restore
+  useEffect(() => {
+    if (wasOffline && isOnline && isPaused && uploadManagerRef.current) {
+      uploadManagerRef.current.resume();
+      setIsPaused(false);
+      toast({
+        title: 'Network Restored',
+        description: 'Resuming upload...',
+      });
+    }
+  }, [wasOffline, isOnline, isPaused]);
+
+  const activeBatches = batches.filter(batch => batch.status !== 'uploaded');
+  const activeQueueBatch = batches.find(b => queuedBatchUids.includes(b.batch_uid));
+  const activeQueueIsReupload = activeQueueBatch ? activeQueueBatch.is_reupload : null;
 
   const columns = [
     {
@@ -148,7 +483,15 @@ const Upload: React.FC = () => {
           <div className="flex flex-col gap-1 min-w-[120px]">
             <div className="flex justify-between items-center text-[10px] font-bold text-primary/70 uppercase tracking-tighter">
               <span>{percentage}%</span>
-              <span>{item.completed_count === item.target_count ? 'Complete' : 'Uploading'}</span>
+              <span>
+                {item.status === 'uploaded'
+                  ? 'Complete'
+                  : activeUploadUid === item.batch_uid
+                    ? 'Uploading'
+                    : queuedBatchUids.includes(item.batch_uid)
+                      ? 'Queued'
+                      : 'Pending'}
+              </span>
             </div>
             <Progress value={percentage} className="h-2 shadow-sm" />
           </div>
@@ -163,41 +506,93 @@ const Upload: React.FC = () => {
     {
       key: 'actions',
       header: 'Action',
-      render: (_: any, item: OperatorBatch) => (
-        item.completed_count < item.target_count ? (
+      render: (_: any, item: OperatorBatch) => {
+        const isCurrentActive = activeUploadUid === item.batch_uid;
+        const isActivelyUploading = isUploading && isCurrentActive && !isPaused;
+        const isCurrentlyPaused = isUploading && isCurrentActive && isPaused;
+        const isQueued = !isCurrentActive && queuedBatchUids.includes(item.batch_uid);
+
+        // Disable logic: 
+        // 1. Queue is full (5 Normal / 10 Re-upload)
+        // 2. Type Mismatch (Normal vs Re-upload)
+        const isQueueFull = queueCount >= (item.is_reupload ? 10 : 5);
+        const isTypeMismatch = activeQueueIsReupload !== null && activeQueueIsReupload !== item.is_reupload;
+
+        const isGlobalBlocked = (isQueueFull || isTypeMismatch) && !isQueued && !isCurrentActive;
+
+        if (item.status === 'uploaded') {
+          return (
+            <div className="flex items-center gap-2">
+              <span className="flex items-center gap-1 text-success text-sm font-medium">
+                <CheckCircle className="h-4 w-4" />
+                Uploaded
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => navigate(`/image-preview/${item.batch_uid}`)}
+                className="h-8 w-8 p-0 hover:text-primary transition-colors"
+                title="Preview Images"
+              >
+                <Eye className="h-4 w-4" />
+              </Button>
+            </div>
+          );
+        }
+
+        if (isQueued) {
+          return (
+            <Button
+              size="sm"
+              disabled
+              className="h-8 gap-2 bg-muted text-muted-foreground border-dashed border-2"
+            >
+              <Loader2 className="h-3 w-3 animate-spin" />
+              In Queue
+            </Button>
+          );
+        }
+
+        return (
           <Button
             size="sm"
-            onClick={() => handleUploadClick(item.batch_id)}
-            className="h-8 gap-2 bg-primary hover:bg-primary/90"
+            onClick={() => isCurrentActive && isUploading ? handlePauseResume() : handleUploadClick(item)}
+            disabled={isGlobalBlocked}
+            className={`h-8 gap-2 transition-all duration-300 ${isActivelyUploading
+              ? 'bg-primary/40 cursor-not-allowed text-white'
+              : isCurrentlyPaused
+                ? 'bg-amber-500 hover:bg-amber-600 animate-pulse text-white shadow-md'
+                : 'bg-primary hover:bg-primary/90 shadow-sm'
+              }`}
           >
-            <FolderOpen className="h-4 w-4" />
-            {(item.completed_count > 0) ? 'Continue' : 'Upload'}
+            {isActivelyUploading ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span className="animate-pulse">Uploading...</span>
+              </>
+            ) : isCurrentlyPaused ? (
+              <>
+                <Play className="h-4 w-4 fill-white" />
+                Resume
+              </>
+            ) : (
+              <>
+                <FolderOpen className="h-4 w-4" />
+                {item.completed_count > 0 ? 'Continue' : 'Upload'}
+              </>
+            )}
           </Button>
-        ) : (
-          <span className="flex items-center gap-1 text-success text-sm font-medium">
-            <CheckCircle className="h-4 w-4" />
-            Uploaded
-          </span>
-        )
-      )
+        );
+      }
     }
   ];
 
-  const filteredByStatus = batches.filter(batch => {
-    if (activeTab === 'all') return true;
-    return batch.status === activeTab;
-  });
-
-  const getCountByStatus = (status: string) => {
-    if (status === 'all') return batches.length;
-    return batches.filter(b => b.status === status).length;
-  };
 
   return (
     <div className="space-y-4 animate-fade-in">
       <PageHeader
-        title="Uploads"
-        description="Select a batch and upload scanned document images"
+        title="Active Uploads"
+        description="View and manage batches currently pending or in progress"
       />
 
       {/* Hidden Folder Input */}
@@ -225,7 +620,7 @@ const Upload: React.FC = () => {
           <div className="flex items-center gap-6 px-4 py-2 bg-background/50 rounded-lg border border-primary/10">
             <div className="flex items-center gap-2 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
               <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-              Multi-Format Support
+              TIFF-Only Processing
             </div>
             <div className="w-px h-4 bg-primary/20" />
             <div className="flex items-center gap-2 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
@@ -244,45 +639,179 @@ const Upload: React.FC = () => {
       ) : (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-              <div className="flex items-center justify-between border-b pb-1">
-                <TabsList className="bg-transparent border-none p-0 h-auto gap-6">
-                  <TabsTrigger
-                    value="all"
-                    className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none px-0 pb-2 h-auto flex gap-2"
-                  >
-                    All Batches <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">{getCountByStatus('all')}</Badge>
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="pending"
-                    className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none px-0 pb-2 h-auto flex gap-2"
-                  >
-                    Pending <Badge variant="secondary" className="h-5 px-1.5 text-[10px] bg-yellow-100/50 text-yellow-700 border-yellow-200">{getCountByStatus('pending')}</Badge>
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="uploaded"
-                    className="data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none px-0 pb-2 h-auto flex gap-2"
-                  >
-                    Uploaded <Badge variant="secondary" className="h-5 px-1.5 text-[10px] bg-green-100/50 text-green-700 border-green-200">{getCountByStatus('uploaded')}</Badge>
-                  </TabsTrigger>
-                </TabsList>
-
-                <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground bg-muted/30 px-3 py-1.5 rounded-full border">
+            <div className="flex items-center gap-2">
+              <h2 className="text-xl font-bold tracking-tight">Pending Batches</h2>
+              <Badge variant="secondary" className="px-2 py-0.5 text-xs font-bold bg-primary/10 text-primary border-primary/20">
+                {activeBatches.length}
+              </Badge>
+            </div>
+            <div className="flex items-center gap-3">
+              {queueCount > 0 && (
+                <div className="flex items-center gap-2 text-xs font-bold text-amber-600 bg-amber-50 px-3 py-1.5 rounded-full border border-amber-200 animate-pulse">
                   <ListFilter className="h-3 w-3" />
-                  Filter Active
+                  Queue: {queueCount}/{activeQueueIsReupload ? 10 : 5}
                 </div>
+              )}
+              <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground bg-muted/30 px-3 py-1.5 rounded-full border">
+                <ListFilter className="h-3 w-3" />
+                Active Only
               </div>
-            </Tabs>
+            </div>
           </div>
 
           <DataTable
-            data={filteredByStatus}
+            data={activeBatches}
             columns={columns}
             searchPlaceholder="Search by Batch ID, Book Or Project..."
-            emptyMessage={`No ${activeTab !== 'all' ? activeTab : ''} batches found.`}
+            emptyMessage="No pending batches found."
           />
         </div>
       )}
+
+      {/* Upload Dialog */}
+      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <div className="flex items-center justify-between">
+              <DialogTitle className="flex items-center gap-2">
+                <UploadIcon className="h-5 w-5 text-primary" />
+                Upload Batch Images
+              </DialogTitle>
+              <Badge variant="outline" className="bg-red-50 text-red-600 border-red-200 text-[10px] font-bold px-2 py-0.5 animate-pulse">
+                TIFF ONLY (.tif, .tiff)
+              </Badge>
+            </div>
+            <DialogDescription>
+              Review batch details and select the folder containing your scanned TIFF images.
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedBatch && (
+            <div className="space-y-6 py-4">
+              {/* Batch Info Grid */}
+              <div className="grid grid-cols-2 gap-x-6 gap-y-4 text-sm bg-muted/30 p-4 rounded-xl border border-border/50 text-left">
+                <div className="space-y-1 col-span-2">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Batch ID</p>
+                  <p className="font-mono font-bold text-primary break-all">{selectedBatch.batch_id}</p>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Project</p>
+                  <p className="font-medium text-foreground">{selectedBatch.project_name}</p>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Book Name</p>
+                  <p className="font-medium text-foreground">{selectedBatch.book_name}</p>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Source</p>
+                  <p className="font-medium text-foreground">{selectedBatch.source_name}</p>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Location</p>
+                  <p className="font-medium text-foreground">{selectedBatch.location_name}</p>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Record Type</p>
+                  <p className="font-medium text-foreground">{selectedBatch.record_type_name}</p>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Target Count</p>
+                  <p className="font-bold flex items-center gap-1.5 text-foreground">
+                    <Files className="h-3.5 w-3.5 text-primary" />
+                    {selectedBatch.target_count} Images
+                  </p>
+                </div>
+              </div>
+
+              {/* Folder Selection Area */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-semibold flex items-center gap-2">
+                    <FolderOpen className="h-4 w-4 text-primary" />
+                    Select Source Folder
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleBrowseClick}
+                    className="h-8 gap-2"
+                  >
+                    <FolderOpen className="h-3.5 w-3.5" />
+                    Browse Folder
+                  </Button>
+                </div>
+
+                {selectedFiles.length > 0 ? (
+                  <div className="p-4 rounded-lg bg-primary/5 border border-primary/20 animate-in fade-in slide-in-from-top-1">
+                    <div className="flex items-center gap-3">
+                      <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
+                        <CheckCircle className="h-6 w-6 text-primary" />
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm font-bold text-primary">TIFF Folder Selected</p>
+                        <p className="text-xs text-muted-foreground">
+                          Ready to upload <strong>{selectedFiles.length}</strong> TIFF images ({selectedBatch.target_count} required)
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    onClick={handleBrowseClick}
+                    className="border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center gap-3 bg-muted/20 hover:bg-muted/40 hover:border-primary/50 transition-all cursor-pointer group"
+                  >
+                    <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center group-hover:scale-110 transition-transform">
+                      <UploadIcon className="h-6 w-6 text-muted-foreground group-hover:text-primary" />
+                    </div>
+                    <div className="text-center">
+                      <p className="text-sm font-medium">Click to browse your TIFF folder</p>
+                      <p className="text-xs text-muted-foreground mt-1">Only .tif or .tiff files will be picked</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-800 text-[11px]">
+                <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                <p><strong>Note:</strong> Only TIFF format images are accepted. JPEG, PNG, or other formats will be filtered out. Ensure the folder has exactly {selectedBatch.target_count} TIFF files.</p>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              onClick={() => setIsDialogOpen(false)}
+              disabled={isSubmitting}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleStartUpload}
+              disabled={selectedFiles.length === 0 || isSubmitting}
+              className="min-w-[140px] shadow-lg shadow-primary/20"
+            >
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Processing...
+                </>
+              ) : isUploading ? (
+                <>
+                  <ListFilter className="mr-2 h-4 w-4" />
+                  Add to Queue
+                </>
+              ) : (
+                <>
+                  <UploadIcon className="mr-2 h-4 w-4" />
+                  Start Upload
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

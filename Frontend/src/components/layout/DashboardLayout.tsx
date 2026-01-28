@@ -26,16 +26,16 @@ const DashboardLayout: React.FC = () => {
   }
 
   return (
-    <div className="flex min-h-screen w-full bg-background relative overflow-x-hidden">
+    <div className="flex h-screen w-full bg-background relative overflow-hidden">
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       <div className={cn(
-        "flex-1 flex flex-col min-w-0 transition-all duration-300 ease-in-out",
+        "flex-1 flex flex-col min-w-0 transition-all duration-300 ease-in-out h-full overflow-hidden",
         sidebarOpen ? "ml-72" : "ml-20"
       )}>
         <TopBar onMenuClick={() => setSidebarOpen(!sidebarOpen)} />
 
-        <main className="flex-1 p-4 lg:p-6 overflow-auto">
+        <main className="flex-1 p-4 lg:p-8 overflow-y-auto custom-scrollbar bg-[#F8FAFC]">
           <Outlet />
         </main>
       </div>

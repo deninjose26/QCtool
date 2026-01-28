@@ -59,6 +59,7 @@
     --sidebar-border: 222 30% 25%;
     --sidebar-ring: 217 91% 60%;
 
+
     /* Custom Tokens */
     --gradient-primary: linear-gradient(135deg, hsl(217 91% 30%) 0%, hsl(217 91% 45%) 100%);
     --gradient-accent: linear-gradient(135deg, hsl(172 66% 40%) 0%, hsl(172 66% 50%) 100%);
@@ -103,6 +104,42 @@
     --sidebar-accent: 222 47% 12%;
     --sidebar-accent-foreground: 215 20% 95%;
     --sidebar-border: 222 30% 15%;
+    --sidebar-ring: 217 91% 60%;
+  }
+
+  .midnight {
+    --background: 222 47% 4%;
+    --foreground: 210 40% 98%;
+
+    --card: 222 47% 6%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222 47% 6%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 217 91% 60%;
+    --primary-foreground: 222 47% 11%;
+
+    --secondary: 222 30% 12%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 222 30% 12%;
+    --muted-foreground: 215 20% 65%;
+
+    --accent: 217 91% 60%;
+    --accent-foreground: 222 47% 11%;
+
+    --border: 222 30% 15%;
+    --input: 222 30% 15%;
+    --ring: 217 91% 60%;
+
+    --sidebar-background: 222 47% 2%;
+    --sidebar-foreground: 215 20% 90%;
+    --sidebar-primary: 217 91% 60%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 222 47% 8%;
+    --sidebar-accent-foreground: 215 20% 98%;
+    --sidebar-border: 222 30% 10%;
     --sidebar-ring: 217 91% 60%;
   }
 }
@@ -214,5 +251,49 @@
 
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
     background: hsl(var(--primary) / 0.7);
+  }
+
+  .animate-spin-slow {
+    animation: spin 3s linear infinite;
+  }
+
+  @keyframes spin {
+    from {
+      transform: rotate(0deg);
+    }
+
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .animate-fade-in {
+    animation: fadeIn 0.5s ease-out;
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .animate-shimmer {
+    animation: shimmer 2.5s infinite linear;
+  }
+
+  @keyframes shimmer {
+    0% {
+      transform: translateX(-100%);
+    }
+
+    100% {
+      transform: translateX(100%);
+    }
   }
 }

@@ -9,6 +9,7 @@ interface PageHeaderProps {
     label: string;
     onClick: () => void;
     icon?: React.ReactNode;
+    disabled?: boolean;
   };
 }
 
@@ -20,7 +21,7 @@ const PageHeader: React.FC<PageHeaderProps> = ({ title, description, action }) =
         {description && <p className="page-description">{description}</p>}
       </div>
       {action && (
-        <Button onClick={action.onClick} className="gap-2">
+        <Button onClick={action.onClick} className="gap-2" disabled={action.disabled}>
           {action.icon || <Plus className="h-4 w-4" />}
           {action.label}
         </Button>

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlmodel import Session, select
 from uuid import UUID
 from pydantic import BaseModel
@@ -6,10 +6,17 @@ from typing import List, Optional
 from common.database import get_session
 from common.models import (
     User, UserRole, ScanningOperatorAllocation, VendorAllocation,
-    Project, Source, Location, RecordOwner, RecordType, RecordName, Batch, Upload
+    Project, Source, Location, RecordOwner, RecordType, RecordName, Batch, Upload, get_ist_now,
+    QCAllocation, QC, QCStatus, QCBatchStatus, Image, FileType, ConversionStatus, NotificationType
 )
 from common.auth_utils import get_current_user
+from common.notification_utils import create_notification
 from datetime import datetime
+import boto3
+from botocore.client import Config
+from botocore.exceptions import ClientError
+import os
+import httpx
 
 router = APIRouter(prefix="/operator", tags=["Operator Operations"])
 
@@ -53,6 +60,25 @@ class RecordNameRead(BaseModel):
     record_name_id: UUID
     record_name: str
     project_id: UUID
+
+class BatchQCHistoryRead(BaseModel):
+    batch_uid: UUID
+    batch_id: str
+    project_name: str
+    source_name: str
+    location_name: str
+    record_owner_name: str
+    record_type_name: str
+    book_name: str
+    total_count: int
+    upload_count: int
+    qc_done_count: int
+    accepted_count: int
+    rejected_count: int
+    qc_status: str
+    upload_type: str
+    allocation_date: Optional[datetime] = None
+    qc_completed_date: Optional[datetime] = None
 
 # --- Endpoints ---
 
@@ -388,6 +414,8 @@ def list_operator_batches(
     if current_user.user_role != UserRole.Scanning_Operator:
         raise HTTPException(status_code=403, detail="Only Operators can access this.")
     
+    from sqlmodel import or_, and_
+    
     # We join with Source, Location, RecordOwner, RecordType, RecordName, Project, and optionally Upload
     statement = select(
         Batch, Source, Location, RecordOwner, RecordType, RecordName, Project, Upload
@@ -399,7 +427,20 @@ def list_operator_batches(
      .join(Project, Source.project_id == Project.project_id)\
      .outerjoin(Upload, Batch.batch_uid == Upload.batch_uid)\
      .join(ScanningOperatorAllocation, Batch.scanning_operator_allocation_id == ScanningOperatorAllocation.scanning_operator_allocation_id)\
-     .where(ScanningOperatorAllocation.allocated_to_operator == current_user.user_id)\
+     .where(
+         and_(
+             Batch.vendor_approved == True,
+             or_(
+                 # Case 1: Assigned to them AND (not uploaded yet OR uploaded by them)
+                 and_(
+                     ScanningOperatorAllocation.allocated_to_operator == current_user.user_id,
+                     or_(Upload.uploaded_by == None, Upload.uploaded_by == current_user.user_id)
+                 ),
+                 # Case 2: They were the one who uploaded it (covers history even if assignment changed)
+                 Upload.uploaded_by == current_user.user_id
+             )
+         )
+     )\
      .order_by(Batch.created_date.desc())
     
     results = session.exec(statement).all()
@@ -415,6 +456,12 @@ def list_operator_batches(
         elif completed >= target and target > 0:
             status = "uploaded"
             
+        upload_type = "Complete"
+        if batch.is_partial:
+            upload_type = "Partial"
+        elif batch.is_reupload:
+            upload_type = "Re-upload"
+            
         output.append({
             "batch_uid": batch.batch_uid,
             "batch_id": batch.batch_id,
@@ -427,7 +474,686 @@ def list_operator_batches(
             "total_count": batch.total_count,    # Book Total
             "target_count": target,              # Batch Target
             "completed_count": completed,        # Actual Uploaded
+            "upload_type": upload_type,
+            "is_reupload": batch.is_reupload,
             "status": status,
-            "created_date": batch.created_date
+            "created_date": batch.created_date,
+            "upload_end_date": upload_rec.upload_end_date if upload_rec else None
         })
     return output
+
+# --- Conversion Webhook (Called by DigitalOcean Function) ---
+from fastapi import Header
+from common.models import Image, ConversionStatus, FileType
+
+class ConversionCompleteData(BaseModel):
+    image_id: UUID
+    qc_path: str
+    jpeg_size: int
+    original_size: Optional[int] = None
+    compression_ratio: Optional[float] = None
+    dimensions: Optional[dict] = None
+
+@router.post("/conversion-complete")
+async def conversion_complete(
+    data: ConversionCompleteData,
+    x_api_key: str = Header(..., alias="X-API-Key"),
+    session: Session = Depends(get_session)
+):
+    """
+    Webhook endpoint called by DigitalOcean Function after successful conversion.
+    Updates the image record with QC path and conversion status.
+    """
+    import os
+    
+    # Verify API key from serverless function
+    expected_key = os.getenv('API_WEBHOOK_SECRET')
+    if not expected_key or x_api_key != expected_key:
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid API key"
+        )
+    
+    # Update image record
+    image = session.get(Image, data.image_id)
+    if not image:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Image not found: {data.image_id}"
+        )
+    
+    # Update conversion status
+    image.qc_s3_path = data.qc_path
+    image.converted_file_type = FileType.JPEG
+    image.conversion_status = ConversionStatus.Jpeg_Converted
+    
+    session.commit()
+    session.refresh(image)
+    
+    return {
+        "success": True,
+        "image_id": str(image.image_id),
+        "conversion_status": image.conversion_status,
+        "message": "Image conversion status updated successfully"
+    }
+
+# --- Batch Progress Tracking ---
+class BatchProgressResponse(BaseModel):
+    batch_uid: UUID
+    total_count: int
+    uploaded_count: int
+    converted_count: int
+    uploaded_files: List[str]
+
+@router.get("/batches/{batch_uid}/progress", response_model=BatchProgressResponse)
+def get_batch_progress(
+    batch_uid: UUID,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get upload and conversion progress for a batch.
+    Used by frontend to resume uploads after network disconnection.
+    """
+    # Verify batch exists and belongs to current operator
+    batch = session.get(Batch, batch_uid)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    
+    # Get allocation to verify ownership
+    allocation = session.get(ScanningOperatorAllocation, batch.scanning_operator_allocation_id)
+    if not allocation or allocation.allocated_to_operator != current_user.user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this batch")
+    
+    # Count uploaded images
+    uploaded_images = session.exec(
+        select(Image).where(Image.batch_uid == batch_uid)
+    ).all()
+    
+    uploaded_count = len(uploaded_images)
+    
+    # Count converted images
+    converted_count = sum(
+        1 for img in uploaded_images 
+        if img.conversion_status == ConversionStatus.Jpeg_Converted
+    )
+    
+    # Get list of uploaded file names
+    uploaded_files = [img.image_name for img in uploaded_images]
+    
+    return BatchProgressResponse(
+        batch_uid=batch_uid,
+        total_count=batch.total_count,
+        uploaded_count=uploaded_count,
+        converted_count=converted_count,
+        uploaded_files=uploaded_files
+    )
+
+# --- S3 Upload Endpoints ---
+
+class PresignedUrlRequest(BaseModel):
+    batch_uid: UUID
+    file_name: str
+    file_size: int
+    content_type: str = "image/tiff"
+
+class PresignedUrlResponse(BaseModel):
+    upload_url: str
+    s3_path: str
+    expires_in: int
+
+class BatchHierarchyResponse(BaseModel):
+    project_name: str
+    source_name: str
+    location_name: str
+    record_owner_name: str
+    record_type_name: str
+    book_name: str
+    upload_code: str
+    base_folder: str
+
+class UploadCompleteRequest(BaseModel):
+    batch_uid: UUID
+    file_name: str
+    s3_path: str
+    file_size: int
+
+@router.get("/batches/{batch_uid}/hierarchy", response_model=BatchHierarchyResponse)
+def get_batch_hierarchy(
+    batch_uid: UUID,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get the hierarchy names for a batch to build S3 paths.
+    Returns sanitized names (uppercase, underscores instead of spaces).
+    """
+    # Get batch
+    batch = session.get(Batch, batch_uid)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    
+    # Verify ownership
+    allocation = session.get(ScanningOperatorAllocation, batch.scanning_operator_allocation_id)
+    if not allocation or allocation.allocated_to_operator != current_user.user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    # Fetch all related entities
+    source = session.get(Source, batch.source_id)
+    location = session.get(Location, batch.location_id)
+    owner = session.get(RecordOwner, batch.record_owner_id)
+    rtype = session.get(RecordType, batch.record_type_id)
+    rname = session.get(RecordName, batch.record_name_id)
+    project = session.get(Project, source.project_id)
+    
+    # Sanitize names for S3 (uppercase, replace spaces with underscores)
+    def sanitize(name: str) -> str:
+        return name.upper().replace(' ', '_').replace('-', '_')
+    
+    # Determine upload code based on Batch ID lineage
+    # Strategy: Parse suffix like _C1R1 into C1/R1
+    import re
+    upload_code = "UNKNOWN"
+    
+    # Match the suffix after the last underscore: C1, P1, C1R1, P2R1 etc.
+    match = re.search(r'_([CP]\d+)(R\d+)?$', batch.batch_id)
+    if match:
+        parent = match.group(1) # C1, P2 etc
+        rework = match.group(2) # R1, R2 etc or None
+        
+        if rework:
+            upload_code = f"{parent}/{rework}"
+        else:
+            upload_code = parent
+    else:
+        # Fallback to sanitized Batch ID if suffix pattern doesn't match
+        upload_code = sanitize(batch.batch_id)
+    
+    return BatchHierarchyResponse(
+        project_name=sanitize(project.project_name),
+        source_name=sanitize(source.source_name),
+        location_name=sanitize(location.location_name),
+        record_owner_name=sanitize(owner.record_owner_name),
+        record_type_name=sanitize(rtype.record_type_name),
+        book_name=sanitize(rname.record_name),
+        upload_code=upload_code,
+        base_folder=os.getenv('Base_folder', 'FamilyaConnect-QCTool')
+    )
+
+@router.post("/batches/{batch_uid}/request-upload-url", response_model=PresignedUrlResponse)
+async def request_upload_url(
+    batch_uid: UUID,
+    request: PresignedUrlRequest,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Generate a pre-signed URL for direct upload to DigitalOcean Spaces.
+    Enforces TIFF-only policy for Normal and Re-upload batches.
+    """
+    # 1. Enforce TIFF-only policy
+    file_lower = request.file_name.lower()
+    if not (file_lower.endswith('.tif') or file_lower.endswith('.tiff')):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type: {request.file_name}. Only TIFF (.tif, .tiff) files are accepted for processing."
+        )
+
+    # Verify batch ownership
+    batch = session.get(Batch, batch_uid)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    
+    allocation = session.get(ScanningOperatorAllocation, batch.scanning_operator_allocation_id)
+    if not allocation or allocation.allocated_to_operator != current_user.user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    # Get hierarchy for path building
+    hierarchy = get_batch_hierarchy(batch_uid, session, current_user)
+    
+    # Build S3 path
+    s3_path = f"{hierarchy.base_folder}/{hierarchy.project_name}/{hierarchy.source_name}/{hierarchy.location_name}/{hierarchy.record_owner_name}/{hierarchy.record_type_name}/{hierarchy.book_name}/{hierarchy.upload_code}/{request.file_name}"
+    
+    # Initialize S3 client (rest of the code remains the same)
+    try:
+        s3_client = boto3.client(
+            's3',
+            endpoint_url=os.getenv('ENDPOINT_URL'),
+            aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+            aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+            region_name=os.getenv('AWS_REGION', 'blr1'),
+            config=Config(signature_version='s3v4')
+        )
+        
+        # Force standard content type for all TIFF variants
+        content_type = "image/tiff"
+        
+        presigned_url = s3_client.generate_presigned_url(
+            'put_object',
+            Params={
+                'Bucket': os.getenv('S3_BUCKET_NAME'),
+                'Key': s3_path,
+                'ContentType': content_type
+            },
+            ExpiresIn=300
+        )
+        
+        return PresignedUrlResponse(
+            upload_url=presigned_url,
+            s3_path=s3_path,
+            expires_in=300
+        )
+        
+    except ClientError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate pre-signed URL: {str(e)}")
+
+@router.post("/batches/{batch_uid}/upload-complete")
+async def upload_complete(
+    batch_uid: UUID,
+    request: UploadCompleteRequest,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Called by frontend after successfully uploading a file to S3.
+    Strictly accepts TIFF files and triggers serverless conversion.
+    """
+    # 1. Enforce TIFF-only policy (secondary check)
+    file_lower = request.file_name.lower()
+    if not (file_lower.endswith('.tif') or file_lower.endswith('.tiff')):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type: {request.file_name}. Only TIFF (.tif, .tiff) files are accepted."
+        )
+
+    # Verify batch ownership
+    batch = session.get(Batch, batch_uid)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    
+    allocation = session.get(ScanningOperatorAllocation, batch.scanning_operator_allocation_id)
+    if not allocation or allocation.allocated_to_operator != current_user.user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    # Check if image already exists
+    existing = session.exec(
+        select(Image)
+        .where(Image.batch_uid == batch_uid)
+        .where(Image.image_name == request.file_name)
+    ).first()
+    
+    if existing:
+        return {
+            "success": True,
+            "image_id": str(existing.image_id),
+            "message": "Image already exists",
+            "conversion_triggered": False
+        }
+    
+    # Get or create upload record
+    upload_record = session.exec(
+        select(Upload).where(Upload.batch_uid == batch_uid)
+    ).first()
+    
+    if not upload_record:
+        s3_folder = '/'.join(request.s3_path.split('/')[:-1]) + '/'
+        upload_record = Upload(
+            batch_uid=batch_uid,
+            completed_count=0,
+            s3_folder_path=s3_folder,
+            upload_status="In_Progress",
+            uploaded_by=current_user.user_id
+        )
+        session.add(upload_record)
+        session.commit()
+        session.refresh(upload_record)
+    
+    # Create image record (assuming TIFF)
+    new_image = Image(
+        upload_id=upload_record.upload_id,
+        batch_uid=batch_uid,
+        image_name=request.file_name,
+        original_s3_path=request.s3_path,
+        qc_s3_path=None,
+        original_file_type=FileType.TIFF,
+        converted_file_type=None,
+        conversion_status=ConversionStatus.Tiff_Received,
+        file_size_bytes=request.file_size
+    )
+    
+    session.add(new_image)
+    
+    # Update upload progress
+    upload_record.completed_count += 1
+    if upload_record.completed_count >= batch.upload_count:
+        upload_record.upload_status = "Completed"
+        upload_record.upload_end_date = get_ist_now()
+        
+        # --- Trigger Notifications ---
+        try:
+            # 1. Notify Supervisor
+            vendor_alloc = session.get(VendorAllocation, allocation.vendor_allocation_id)
+            if vendor_alloc:
+                create_notification(
+                    session=session,
+                    user_id=vendor_alloc.allocated_by_supervisor,
+                    notif_type=NotificationType.Batch_Uploaded,
+                    title="New Batch Uploaded",
+                    message=f"Operator {current_user.name} has completed upload for Batch {batch.batch_id} ({batch.total_count} images).",
+                    link="/upload-history"  # Supervisor upload history
+                )
+            
+            # 2. Notify Operator (Confirmation)
+            create_notification(
+                session=session,
+                user_id=current_user.user_id,
+                notif_type=NotificationType.Batch_Uploaded,
+                title="Upload Successful",
+                message=f"Batch {batch.batch_id} has been uploaded and sent for conversion.",
+                link="/upload"  # Operator upload page
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to create notification: {e}")
+    
+    session.commit()
+    session.refresh(new_image)
+    
+    # Trigger conversion
+    conversion_triggered = False
+    function_url = os.getenv('DO_FUNCTION_CONVERT_URL')
+    
+    if function_url and function_url != 'https://placeholder-will-update-later.com':
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                await client.post(
+                    function_url,
+                    json={
+                        "image_id": str(new_image.image_id),
+                        "original_path": request.s3_path,
+                        "original_bucket": os.getenv('S3_BUCKET_NAME'),
+                        "qc_bucket": os.getenv('QC_S3_BUCKET_NAME'),
+                        "api_secret": os.getenv('API_WEBHOOK_SECRET')
+                    }
+                )
+                conversion_triggered = True
+        except Exception as e:
+            print(f"[WARNING] Failed to trigger conversion: {str(e)}")
+    
+    return {
+        "success": True,
+        "image_id": str(new_image.image_id),
+        "upload_progress": {
+            "completed": upload_record.completed_count,
+            "total": batch.upload_count,
+            "percentage": round((upload_record.completed_count / batch.upload_count) * 100, 2)
+        },
+        "conversion_triggered": conversion_triggered,
+        "message": "Image uploaded successfully (TIFF processed for conversion)"
+    }
+
+@router.get("/batches/{batch_uid}/images")
+def get_batch_images(
+    batch_uid: UUID,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get list of images in a batch with presigned URLs for preview.
+    Favors JPEG converted images if available.
+    """
+    # 1. Verify batch exists
+    batch = session.get(Batch, batch_uid)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    
+    # 2. Verify ownership (Must be assigned to or uploaded by this operator)
+    allocation = session.get(ScanningOperatorAllocation, batch.scanning_operator_allocation_id)
+    if not allocation or allocation.allocated_to_operator != current_user.user_id:
+        # Check if they uploaded it even if allocation changed
+        upload_rec = session.exec(select(Upload).where(Upload.batch_uid == batch_uid)).first()
+        if not upload_rec or upload_rec.uploaded_by != current_user.user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to access these batch images")
+    
+    # 3. Fetch images (Filter for only converted JPEGs)
+    images = session.exec(
+        select(Image)
+        .where(Image.batch_uid == batch_uid)
+        .where(Image.conversion_status == ConversionStatus.Jpeg_Converted)
+        .order_by(Image.image_name)
+    ).all()
+    
+    # 4. Generate presigned URLs
+    s3_client = boto3.client(
+        's3',
+        endpoint_url=os.getenv('QC_ENDPOINT_URL') or os.getenv('ENDPOINT_URL'),
+        aws_access_key_id=os.getenv('QC_AWS_ACCESS_KEY_ID') or os.getenv('AWS_ACCESS_KEY_ID'),
+        aws_secret_access_key=os.getenv('QC_AWS_SECRET_ACCESS_KEY') or os.getenv('AWS_SECRET_ACCESS_KEY'),
+        region_name=os.getenv('QC_AWS_REGION') or os.getenv('AWS_REGION', 'blr1'),
+        config=Config(signature_version='s3v4')
+    )
+    
+    output = []
+    qc_bucket_name = os.getenv('QC_S3_BUCKET_NAME')
+    
+    for img in images:
+        # Use JPEG (QC Bucket) exclusively
+        if not img.qc_s3_path:
+            continue
+
+        try:
+            url = s3_client.generate_presigned_url(
+                'get_object',
+                Params={
+                    'Bucket': qc_bucket_name,
+                    'Key': img.qc_s3_path
+                },
+                ExpiresIn=3600 # 1 hour
+            )
+        except Exception:
+            url = None
+            
+        output.append({
+            "image_id": img.image_id,
+            "image_name": img.image_name,
+            "url": url,
+            "is_converted": True,
+            "status": img.conversion_status
+        })
+        
+    return output
+@router.get("/qc-history", response_model=List[BatchQCHistoryRead])
+def get_operator_qc_history(
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Get QC history for batches uploaded by this operator"""
+    if current_user.user_role != UserRole.Scanning_Operator:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    from sqlalchemy import func
+    
+    # Filter by batches where Upload.uploaded_by is current_user and status is verified
+    statement = select(
+        Batch, Source, Location, RecordOwner, RecordType, RecordName, Project, QCAllocation
+    ).join(Source, Batch.source_id == Source.source_id)\
+     .join(Location, Batch.location_id == Location.location_id)\
+     .join(RecordOwner, Batch.record_owner_id == RecordOwner.record_owner_id)\
+     .join(RecordType, Batch.record_type_id == RecordType.record_type_id)\
+     .join(RecordName, Batch.record_name_id == RecordName.record_name_id)\
+     .join(Project, Source.project_id == Project.project_id)\
+     .join(Upload, Batch.batch_uid == Upload.batch_uid)\
+     .join(QCAllocation, Batch.batch_uid == QCAllocation.batch_uid)\
+     .where(Upload.uploaded_by == current_user.user_id)\
+     .where(QCAllocation.qc_batch_status.in_([QCBatchStatus.Verified, QCBatchStatus.Verified_With_Rejection]))\
+     .order_by(Batch.created_date.desc())
+    
+    results = session.exec(statement).all()
+    
+    output = []
+    for b, s, l, ro, rt, rn, p, qca in results:
+        qc_done = 0
+        accepted = 0
+        rejected = 0
+        qc_status = "Pending Allocation"
+        allocation_date = None
+        qc_completed_date = None
+
+        if qca:
+            qc_status = qca.qc_batch_status
+            allocation_date = qca.allocation_date
+            qc_completed_date = qca.qc_completed_date
+            
+            # Count QC stats
+            qc_done = session.exec(
+                select(func.count(QC.qc_id))
+                .where(QC.qc_allocation_id == qca.qc_allocation_id)
+                .where(QC.qc_status != QCStatus.Pending)
+            ).first() or 0
+
+            accepted = session.exec(
+                select(func.count(QC.qc_id))
+                .where(QC.qc_allocation_id == qca.qc_allocation_id)
+                .where(QC.qc_status == QCStatus.Approved)
+            ).first() or 0
+
+            rejected = session.exec(
+                select(func.count(QC.qc_id))
+                .where(QC.qc_allocation_id == qca.qc_allocation_id)
+                .where(QC.qc_status == QCStatus.Rejected)
+            ).first() or 0
+
+        # Determine upload type
+        upload_type = "Complete"
+        if b.is_reupload: upload_type = "Re-upload"
+        elif b.is_partial: upload_type = "Partial"
+
+        output.append(BatchQCHistoryRead(
+            batch_uid=b.batch_uid,
+            batch_id=b.batch_id,
+            project_name=p.project_name,
+            source_name=s.source_name,
+            location_name=l.location_name,
+            record_owner_name=ro.record_owner_name,
+            record_type_name=rt.record_type_name,
+            book_name=rn.record_name,
+            total_count=b.total_count,
+            upload_count=b.upload_count,
+            qc_done_count=qc_done,
+            accepted_count=accepted,
+            rejected_count=rejected,
+            qc_status=qc_status,
+            upload_type=upload_type,
+            allocation_date=allocation_date,
+            qc_completed_date=qc_completed_date
+        ))
+    
+    return output
+@router.get("/qc-report/{batch_uid}")
+def get_operator_batch_qc_report(
+    batch_uid: UUID,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Get detailed image-by-image QC report for an operator's verified batch"""
+    if current_user.user_role != UserRole.Scanning_Operator:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Verify batch was uploaded by this operator and is verified
+    statement = select(QCAllocation)\
+        .join(Batch, QCAllocation.batch_uid == Batch.batch_uid)\
+        .join(Upload, Batch.batch_uid == Upload.batch_uid)\
+        .where(Batch.batch_uid == batch_uid)\
+        .where(Upload.uploaded_by == current_user.user_id)\
+        .where(QCAllocation.qc_batch_status.in_([QCBatchStatus.Verified, QCBatchStatus.Verified_With_Rejection]))
+
+    allocation = session.exec(statement).first()
+    if not allocation:
+        raise HTTPException(status_code=404, detail="Verified batch report not found for your uploads")
+
+    # Get all images and their QC records
+    from common.models import Image
+    statement = (
+        select(QC, Image)
+        .join(Image, QC.image_id == Image.image_id)
+        .where(QC.qc_allocation_id == allocation.qc_allocation_id)
+        .order_by(Image.image_name)
+    )
+    
+    results = session.exec(statement).all()
+    
+    export_data = []
+    for qc, img in results:
+        export_data.append({
+            "image_name": img.image_name,
+            "qc_status": qc.qc_status,
+            "orientation_error": "Yes" if qc.orientation_error else "No",
+            "remarks": qc.remarks or "",
+            "qc_date": qc.qc_date.strftime("%Y-%m-%d %H:%M:%S") if qc.qc_date else ""
+        })
+    
+    return export_data
+
+@router.get("/dashboard-stats")
+def get_operator_dashboard_stats(
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Get statistics for the Operator Dashboard"""
+    if current_user.user_role != UserRole.Scanning_Operator:
+        raise HTTPException(status_code=403, detail="Not authorized.")
+
+    from sqlalchemy import func
+
+    # 1. Performance Metrics
+    batches_stmt = (
+        select(Batch, Upload)
+        .join(ScanningOperatorAllocation, Batch.scanning_operator_allocation_id == ScanningOperatorAllocation.scanning_operator_allocation_id)
+        .outerjoin(Upload, Batch.batch_uid == Upload.batch_uid)
+        .where(ScanningOperatorAllocation.allocated_to_operator == current_user.user_id)
+    )
+    batches_results = session.exec(batches_stmt).all()
+    
+    total_batches = len(batches_results)
+    uploaded_images = sum(u.completed_count for b, u in batches_results if u)
+    
+    # Rework Assignments
+    rework_batches = len([b for b, u in batches_results if b.is_reupload and not (u and u.upload_status == 'Completed')])
+
+    # 2. Quality Stats
+    all_qca_stmt = (
+        select(QCAllocation)
+        .join(Batch, QCAllocation.batch_uid == Batch.batch_uid)
+        .join(ScanningOperatorAllocation, Batch.scanning_operator_allocation_id == ScanningOperatorAllocation.scanning_operator_allocation_id)
+        .where(ScanningOperatorAllocation.allocated_to_operator == current_user.user_id)
+        .where(QCAllocation.qc_batch_status.in_([QCBatchStatus.Verified, QCBatchStatus.Verified_With_Rejection]))
+    )
+    all_qca = session.exec(all_qca_stmt).all()
+    
+    total_accepted = 0
+    total_rejected = 0
+    for qca in all_qca:
+        accepted = session.exec(select(func.count(QC.qc_id)).where(QC.qc_allocation_id == qca.qc_allocation_id).where(QC.qc_status == QCStatus.Approved)).one()
+        rejected = session.exec(select(func.count(QC.qc_id)).where(QC.qc_allocation_id == qca.qc_allocation_id).where(QC.qc_status == QCStatus.Rejected)).one()
+        total_accepted += accepted
+        total_rejected += rejected
+
+    # 3. Recent Activity 
+    recent_uploads = []
+    sorted_batches = sorted(batches_results, key=lambda x: x[0].created_date, reverse=True)[:5]
+    for b, u in sorted_batches:
+        recent_uploads.append({
+            "batch_id": b.batch_id,
+            "status": u.upload_status if u else "Pending",
+            "images": u.completed_count if u else 0,
+            "date": b.created_date
+        })
+
+    return {
+        "metrics": {
+            "total_batches": total_batches,
+            "uploaded_images": uploaded_images,
+            "rework_batches": rework_batches,
+            "accuracy": round((total_accepted / (total_accepted + total_rejected) * 100), 2) if (total_accepted + total_rejected) > 0 else 100
+        },
+        "recent_uploads": recent_uploads
+    }

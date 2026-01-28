@@ -2,10 +2,10 @@ import { NavItem, UserRole } from '@/types';
 
 export const roleLabels: Record<UserRole, string> = {
   SuperAdmin: 'Super Admin',
-  Upload_Supervisor: 'Upload Supervisor',
+  Upload_Supervisor: 'Upload Manager',
   Vendor: 'Vendor',
   Scanning_Operator: 'Scanning Operator',
-  QC_Supervisor: 'QC Supervisor',
+  QC_Supervisor: 'QC Manager',
   QC_User: 'QC User',
 };
 
@@ -39,6 +39,7 @@ export const getNavItems = (role: UserRole): NavItem[] => {
         { title: 'Vendor Allocation', href: '/vendor-allocation', icon: 'GitBranch' },
         { title: 'Upload History', href: '/upload-history', icon: 'Upload' },
         { title: 'QC History', href: '/qc-history', icon: 'CheckCircle' },
+        { title: 'Image Preview', href: '/supervisor/image-preview', icon: 'Image' },
       ];
 
     case 'Vendor':
@@ -48,15 +49,16 @@ export const getNavItems = (role: UserRole): NavItem[] => {
         { title: 'Operator Allocation', href: '/operator-allocation', icon: 'GitBranch' },
         { title: 'Upload History', href: '/upload-history', icon: 'Upload' },
         { title: 'QC History', href: '/qc-history', icon: 'CheckCircle' },
-        { title: 'Image Preview', href: '/image-preview', icon: 'Image' },
-        { title: 'Reallocation', href: '/reallocation', icon: 'RefreshCw' },
+        { title: 'Image Preview', href: '/vendor/image-preview', icon: 'Image' },
+        { title: 'Re-upload Queue', href: '/reallocation', icon: 'RefreshCw' },
       ];
 
     case 'Scanning_Operator':
       return [
         ...common,
         { title: 'Create Batch', href: '/create-batch', icon: 'PlusCircle' },
-        { title: 'Uploads', href: '/upload', icon: 'Upload' },
+        { title: 'Active Uploads', href: '/upload', icon: 'Upload' },
+        { title: 'Re-upload Batches', href: '/re-upload', icon: 'RefreshCw' },
         { title: 'Upload History', href: '/upload-history', icon: 'History' },
         { title: 'Image Preview', href: '/image-preview', icon: 'Image' },
         { title: 'QC History', href: '/qc-history', icon: 'CheckCircle' },
@@ -67,8 +69,9 @@ export const getNavItems = (role: UserRole): NavItem[] => {
         ...common,
         { title: 'QC Users', href: '/qc-users', icon: 'Users' },
         { title: 'Batch Allocation', href: '/batch-allocation', icon: 'GitBranch' },
-        { title: 'QC History', href: '/qc-history', icon: 'History' },
-        { title: 'Second Level QC', href: '/second-level-qc', icon: 'Shield' },
+        { title: 'Allocation History', href: '/allocation-history', icon: 'ClipboardList' },
+        { title: 'QC Review', href: '/qc-review-queue', icon: 'CheckCircle' },
+        { title: 'QC Master History', href: '/qc-history', icon: 'History' },
       ];
 
     case 'QC_User':

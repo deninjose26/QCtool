@@ -17,6 +17,7 @@ export interface User {
   createdBy?: string;
   createdAt: string;
   status: boolean;
+  profile_picture_path?: string;
 }
 
 // Project & Source Management

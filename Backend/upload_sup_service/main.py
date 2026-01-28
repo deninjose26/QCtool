@@ -1,15 +1,38 @@
 from fastapi import APIRouter, Depends, HTTPException, FastAPI
 from sqlmodel import Session, select, func
+from sqlalchemy.orm import aliased
 from pydantic import BaseModel
 from common.database import get_session
-from common.models import Project, Source, Location, RecordOwner, RecordType, UserRole
-from common.auth_utils import role_required
+from common.models import (
+    Project, Source, Location, RecordOwner, RecordType, UserRole, User, 
+    Batch, Upload, VendorAllocation, ScanningOperatorAllocation, RecordName,
+    get_ist_now
+)
+from common.auth_utils import role_required, get_current_user
+from datetime import datetime
+from typing import Optional, List
 from uuid import UUID
 
 app = FastAPI(title="Upload Supervisor Service")
 router = APIRouter(prefix="/upload-sup", tags=["Upload Supervisor"])
 
 # --- Schemas ---
+class BatchRead(BaseModel):
+    batch_uid: UUID
+    batch_id: str
+    project_name: str
+    source_name: str
+    location_name: str
+    record_owner_name: str
+    record_type_name: str
+    book_name: str
+    target_count: int
+    completed_count: int
+    vendor_name: str
+    operator_name: str
+    upload_type: str
+    status: str
+    upload_end_date: Optional[datetime] = None
 
 class SourceCreate(BaseModel):
     project_id: UUID
@@ -203,13 +226,21 @@ class VendorAllocationCreate(BaseModel):
     allocated_to_vendor: UUID
     allocated_by_supervisor: UUID
 
+class VendorAllocationUpdate(BaseModel):
+    project_id: Optional[UUID] = None
+    source_id: Optional[UUID] = None
+    location_id: Optional[UUID] = None
+    record_owner_id: Optional[UUID] = None
+    allocated_to_vendor: Optional[UUID] = None
+    is_active: Optional[bool] = None
+
 @router.post("/allocations", response_model=VendorAllocation)
 def create_allocation(
     alloc_data: VendorAllocationCreate,
     session: Session = Depends(get_session),
     role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor]))
 ):
-    # Check if this combination is already allocated
+    # Check if this active combination is already allocated
     existing = session.exec(
         select(VendorAllocation).where(
             VendorAllocation.project_id == alloc_data.project_id,
@@ -221,7 +252,7 @@ def create_allocation(
     ).first()
     
     if existing:
-        raise HTTPException(status_code=400, detail="This combination is already allocated to a vendor.")
+        raise HTTPException(status_code=400, detail="This combination is already active for a vendor.")
 
     db_alloc = VendorAllocation(
         project_id=alloc_data.project_id,
@@ -241,11 +272,13 @@ def get_allocations(
     session: Session = Depends(get_session),
     role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor]))
 ):
-    return session.exec(select(VendorAllocation).where(VendorAllocation.is_active == True)).all()
+    # Return all allocations (active and disabled) for management
+    return session.exec(select(VendorAllocation).order_by(VendorAllocation.created_date.desc())).all()
 
-@router.delete("/allocations/{alloc_id}")
-def delete_allocation(
+@router.put("/allocations/{alloc_id}", response_model=VendorAllocation)
+def update_allocation(
     alloc_id: UUID,
+    alloc_data: VendorAllocationUpdate,
     session: Session = Depends(get_session),
     role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor]))
 ):
@@ -253,9 +286,32 @@ def delete_allocation(
     if not db_alloc:
         raise HTTPException(status_code=404, detail="Allocation not found")
     
-    # Soft delete
-    db_alloc.is_active = False
+    if alloc_data.project_id: db_alloc.project_id = alloc_data.project_id
+    if alloc_data.source_id: db_alloc.source_id = alloc_data.source_id
+    if alloc_data.location_id: db_alloc.location_id = alloc_data.location_id
+    if alloc_data.record_owner_id: db_alloc.record_owner_id = alloc_data.record_owner_id
+    if alloc_data.allocated_to_vendor: db_alloc.allocated_to_vendor = alloc_data.allocated_to_vendor
+    if alloc_data.is_active is not None: db_alloc.is_active = alloc_data.is_active
+    
+    db_alloc.last_updated = get_ist_now()
     session.add(db_alloc)
+    session.commit()
+    session.refresh(db_alloc)
+    return db_alloc
+
+@router.delete("/allocations/{alloc_id}")
+def delete_allocation(
+    alloc_id: UUID,
+    session: Session = Depends(get_session),
+    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor]))
+):
+    # Deletion is still available for SuperAdmins if needed, 
+    # but we will emphasize 'is_active' toggle in UI
+    db_alloc = session.get(VendorAllocation, alloc_id)
+    if not db_alloc:
+        raise HTTPException(status_code=404, detail="Allocation not found")
+    
+    session.delete(db_alloc)
     session.commit()
     return {"ok": True}
 
@@ -265,3 +321,212 @@ app.include_router(router)
 @app.get("/")
 def read_root():
     return {"service": "Upload Supervisor Service", "port": 8003}
+
+# --- Batch History ---
+
+@router.get("/batches", response_model=List[BatchRead])
+def list_sup_batches(
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.user_role not in [UserRole.SuperAdmin, UserRole.Upload_Supervisor]:
+        raise HTTPException(status_code=403, detail="Not authorized.")
+    
+    OperatorUser = aliased(User)
+    VendorUser = aliased(User)
+    
+    statement = select(
+        Batch, Source, Location, RecordOwner, RecordType, RecordName, Project, Upload, OperatorUser, VendorUser
+    ).join(Source, Batch.source_id == Source.source_id)\
+     .join(Location, Batch.location_id == Location.location_id)\
+     .join(RecordOwner, Batch.record_owner_id == RecordOwner.record_owner_id)\
+     .join(RecordType, Batch.record_type_id == RecordType.record_type_id)\
+     .join(RecordName, Batch.record_name_id == RecordName.record_name_id)\
+     .join(Project, Source.project_id == Project.project_id)\
+     .outerjoin(Upload, Batch.batch_uid == Upload.batch_uid)\
+     .join(ScanningOperatorAllocation, Batch.scanning_operator_allocation_id == ScanningOperatorAllocation.scanning_operator_allocation_id)\
+     .join(VendorAllocation, ScanningOperatorAllocation.vendor_allocation_id == VendorAllocation.vendor_allocation_id)\
+     .join(OperatorUser, ScanningOperatorAllocation.allocated_to_operator == OperatorUser.user_id)\
+     .join(VendorUser, VendorAllocation.allocated_to_vendor == VendorUser.user_id)\
+     .order_by(Batch.created_date.desc())
+    
+    results = session.exec(statement).all()
+    
+    output = []
+    for b, s, l, ro, rt, rn, p, u, opt, vnd in results:
+        status = 'pending'
+        if u:
+            if u.upload_status == 'Completed':
+                status = 'uploaded'
+            elif u.upload_status == 'In_Progress':
+                status = 'uploading'
+        
+        upload_type = "Complete"
+        if b.is_partial:
+            upload_type = "Partial"
+        elif b.is_reupload:
+            upload_type = "Re-upload"
+            
+        output.append(BatchRead(
+            batch_uid=b.batch_uid,
+            batch_id=b.batch_id,
+            project_name=p.project_name,
+            source_name=s.source_name,
+            location_name=l.location_name,
+            record_owner_name=ro.record_owner_name,
+            record_type_name=rt.record_type_name,
+            book_name=rn.record_name,
+            target_count=b.total_count,
+            completed_count=u.completed_count if u else 0,
+            vendor_name=vnd.name,
+            operator_name=opt.name,
+            upload_type=upload_type,
+            status=status,
+            upload_end_date=u.upload_end_date if u else None
+        ))
+    
+    return output
+
+# Alias endpoint for clarity in frontend
+@router.get("/all-batches", response_model=List[BatchRead])
+def list_all_batches(
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Get all batches uploaded by all scanning operators (same as /batches)"""
+    return list_sup_batches(session, current_user)
+
+@router.get("/batch-images/{batch_uid}")
+def get_supervisor_batch_images(
+    batch_uid: UUID,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Get all images for a specific batch"""
+    if current_user.user_role not in [UserRole.SuperAdmin, UserRole.Upload_Supervisor]:
+        raise HTTPException(status_code=403, detail="Only Supervisors can access this.")
+    
+    # Verify the batch exists
+    batch = session.get(Batch, batch_uid)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    
+    # Import required models and libraries
+    from common.models import Image, ConversionStatus
+    import boto3
+    from botocore.client import Config
+    import os
+    
+    # Fetch converted images from database
+    images = session.exec(
+        select(Image)
+        .where(Image.batch_uid == batch_uid)
+        .where(Image.conversion_status == ConversionStatus.Jpeg_Converted)
+        .order_by(Image.image_name)
+    ).all()
+    
+    # Generate presigned URLs
+    s3_client = boto3.client(
+        's3',
+        endpoint_url=os.getenv('QC_ENDPOINT_URL') or os.getenv('ENDPOINT_URL'),
+        aws_access_key_id=os.getenv('QC_AWS_ACCESS_KEY_ID') or os.getenv('AWS_ACCESS_KEY_ID'),
+        aws_secret_access_key=os.getenv('QC_AWS_SECRET_ACCESS_KEY') or os.getenv('AWS_SECRET_ACCESS_KEY'),
+        region_name=os.getenv('QC_AWS_REGION') or os.getenv('AWS_REGION', 'blr1'),
+        config=Config(signature_version='s3v4')
+    )
+    
+    output = []
+    qc_bucket_name = os.getenv('QC_S3_BUCKET_NAME')
+    
+    for img in images:
+        # Use JPEG (QC Bucket) exclusively
+        if not img.qc_s3_path:
+            continue
+
+        try:
+            url = s3_client.generate_presigned_url(
+                'get_object',
+                Params={
+                    'Bucket': qc_bucket_name,
+                    'Key': img.qc_s3_path
+                },
+                ExpiresIn=3600  # 1 hour
+            )
+        except Exception:
+            url = None
+            
+        output.append({
+            "image_id": str(img.image_id),
+            "image_name": img.image_name,
+            "url": url,
+            "is_converted": True,
+            "status": img.conversion_status
+        })
+        
+    return output
+
+@router.get("/dashboard-stats")
+def get_upload_sup_dashboard_stats(
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Get statistics for the Upload Supervisor Dashboard"""
+    if current_user.user_role not in [UserRole.SuperAdmin, UserRole.Upload_Supervisor]:
+        raise HTTPException(status_code=403, detail="Not authorized.")
+
+    # 1. Basic Counts
+    counts = {
+        "vendors": session.exec(select(func.count(User.user_id)).where(User.user_role == UserRole.Vendor)).one(),
+        "allocations": session.exec(select(func.count(VendorAllocation.vendor_allocation_id)).where(VendorAllocation.is_active == True)).one(),
+        "sources": session.exec(select(func.count(Source.source_id))).one(),
+        "locations": session.exec(select(func.count(Location.location_id))).one(),
+    }
+
+    # 2. Upload Performance
+    all_batches = session.exec(select(Batch)).all()
+    total_batches = len(all_batches)
+    target_images = sum(b.total_count for b in all_batches)
+    
+    all_uploads = session.exec(select(Upload)).all()
+    uploaded_images = sum(u.completed_count for u in all_uploads)
+    
+    # Completed vs In-Progress Batches
+    completed_batches = len([u for u in all_uploads if u.upload_status == 'Completed'])
+    in_progress_batches = len([u for u in all_uploads if u.upload_status == 'In_Progress'])
+
+    # 3. Recent Allocations
+    recent_allocs_stmt = (
+        select(VendorAllocation, Project, Source, User)
+        .join(Project, VendorAllocation.project_id == Project.project_id)
+        .join(Source, VendorAllocation.source_id == Source.source_id)
+        .join(User, VendorAllocation.allocated_to_vendor == User.user_id)
+        .where(VendorAllocation.is_active == True)
+        .order_by(VendorAllocation.created_date.desc())
+        .limit(5)
+    )
+    recent_allocs_results = session.exec(recent_allocs_stmt).all()
+    
+    formatted_allocs = []
+    for va, p, s, v in recent_allocs_results:
+        formatted_allocs.append({
+            "project": p.project_name,
+            "source": s.source_name,
+            "vendor": v.name,
+            "date": va.created_date
+        })
+
+    # 4. Recent Batches
+    recent_batches = list_sup_batches(session, current_user)[:5]
+
+    return {
+        "counts": counts,
+        "performance": {
+            "total_batches": total_batches,
+            "completed_batches": completed_batches,
+            "in_progress_batches": in_progress_batches,
+            "target_images": target_images,
+            "uploaded_images": uploaded_images
+        },
+        "recent_allocations": formatted_allocs,
+        "recent_batches": recent_batches
+    }

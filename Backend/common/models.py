@@ -1,8 +1,12 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Optional, List
 from uuid import UUID, uuid4
 from sqlmodel import SQLModel, Field, Relationship, create_engine, Session
+
+def get_ist_now():
+    """Helper to get current time in India Standard Time (naive)"""
+    return datetime.utcnow() + timedelta(hours=5, minutes=30)
 
 # --- Enums ---
 
@@ -37,12 +41,8 @@ class QCBatchStatus(str, Enum):
     QC_Pending = "QC_Pending"
     QC_In_Progress = "QC_In_Progress"
     Completed = "Completed"
-
-class QCStatus(str, Enum):
-    Pending = "Pending"
-    Approved = "Approved"
-    Rejected = "Rejected"
-    Needs_Rework = "Needs_Rework"
+    Verified = "Verified"
+    Verified_With_Rejection = "Verified_With_Rejection"
 
 # --- Models ---
 
@@ -56,8 +56,10 @@ class User(SQLModel, table=True):
     user_role: UserRole
     is_active: bool = Field(default=True)
     created_by: Optional[UUID] = Field(default=None, foreign_key="users.user_id")
-    created_date: datetime = Field(default_factory=datetime.utcnow)
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
+    created_date: datetime = Field(default_factory=get_ist_now)
+    last_updated: datetime = Field(default_factory=get_ist_now)
+    profile_picture_path: Optional[str] = None
+    email_notifications_enabled: bool = Field(default=True)
 
 class Project(SQLModel, table=True):
     __tablename__ = "projects"
@@ -65,8 +67,8 @@ class Project(SQLModel, table=True):
     project_code: str = Field(unique=True, index=True)
     project_name: str
     created_by: UUID = Field(foreign_key="users.user_id")
-    created_date: datetime = Field(default_factory=datetime.utcnow)
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
+    created_date: datetime = Field(default_factory=get_ist_now)
+    last_updated: datetime = Field(default_factory=get_ist_now)
 
 class Source(SQLModel, table=True):
     __tablename__ = "source"
@@ -75,8 +77,8 @@ class Source(SQLModel, table=True):
     source_code: str
     source_name: str
     created_by: UUID = Field(foreign_key="users.user_id")
-    created_date: datetime = Field(default_factory=datetime.utcnow)
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
+    created_date: datetime = Field(default_factory=get_ist_now)
+    last_updated: datetime = Field(default_factory=get_ist_now)
 
 class Location(SQLModel, table=True):
     __tablename__ = "location"
@@ -86,8 +88,8 @@ class Location(SQLModel, table=True):
     location_code: str
     location_name: str
     created_by: UUID = Field(foreign_key="users.user_id")
-    created_date: datetime = Field(default_factory=datetime.utcnow)
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
+    created_date: datetime = Field(default_factory=get_ist_now)
+    last_updated: datetime = Field(default_factory=get_ist_now)
 
 class RecordOwner(SQLModel, table=True):
     __tablename__ = "record_owners"
@@ -98,8 +100,8 @@ class RecordOwner(SQLModel, table=True):
     record_owner_code: str
     record_owner_name: str
     created_by: UUID = Field(foreign_key="users.user_id")
-    created_date: datetime = Field(default_factory=datetime.utcnow)
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
+    created_date: datetime = Field(default_factory=get_ist_now)
+    last_updated: datetime = Field(default_factory=get_ist_now)
 
 class RecordName(SQLModel, table=True):
     __tablename__ = "record_name"
@@ -108,8 +110,8 @@ class RecordName(SQLModel, table=True):
     record_code: str = Field(unique=True, index=True)
     record_name: str
     created_by: UUID = Field(foreign_key="users.user_id")
-    created_date: datetime = Field(default_factory=datetime.utcnow)
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
+    created_date: datetime = Field(default_factory=get_ist_now)
+    last_updated: datetime = Field(default_factory=get_ist_now)
 
 class RecordType(SQLModel, table=True):
     __tablename__ = "record_type"
@@ -118,8 +120,8 @@ class RecordType(SQLModel, table=True):
     record_type_name: str
     source_id: UUID = Field(foreign_key="source.source_id")
     created_by: UUID = Field(foreign_key="users.user_id")
-    created_date: datetime = Field(default_factory=datetime.utcnow)
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
+    created_date: datetime = Field(default_factory=get_ist_now)
+    last_updated: datetime = Field(default_factory=get_ist_now)
 
 class VendorAllocation(SQLModel, table=True):
     __tablename__ = "vendor_allocation"
@@ -131,8 +133,8 @@ class VendorAllocation(SQLModel, table=True):
     allocated_to_vendor: UUID = Field(foreign_key="users.user_id")
     allocated_by_supervisor: UUID = Field(foreign_key="users.user_id")
     is_active: bool = Field(default=True)
-    created_date: datetime = Field(default_factory=datetime.utcnow)
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
+    created_date: datetime = Field(default_factory=get_ist_now)
+    last_updated: datetime = Field(default_factory=get_ist_now)
 
 class ScanningOperatorAllocation(SQLModel, table=True):
     __tablename__ = "scanning_operator_allocation"
@@ -140,8 +142,8 @@ class ScanningOperatorAllocation(SQLModel, table=True):
     vendor_allocation_id: UUID = Field(foreign_key="vendor_allocation.vendor_allocation_id")
     allocated_to_operator: UUID = Field(foreign_key="users.user_id")
     is_active: bool = Field(default=True)
-    created_date: datetime = Field(default_factory=datetime.utcnow)
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
+    created_date: datetime = Field(default_factory=get_ist_now)
+    last_updated: datetime = Field(default_factory=get_ist_now)
 
 class Batch(SQLModel, table=True):
     __tablename__ = "batch"
@@ -158,6 +160,7 @@ class Batch(SQLModel, table=True):
     is_complete: bool = Field(default=False)
     is_partial: bool = Field(default=False)
     is_reupload: bool = Field(default=False)
+    vendor_approved: bool = Field(default=True)
     created_date: datetime = Field(default_factory=datetime.utcnow)
     last_updated: datetime = Field(default_factory=datetime.utcnow)
 
@@ -169,9 +172,9 @@ class Upload(SQLModel, table=True):
     s3_folder_path: str
     upload_status: UploadStatus = Field(default=UploadStatus.Pending)
     uploaded_by: UUID = Field(foreign_key="users.user_id")
-    upload_start_date: datetime = Field(default_factory=datetime.utcnow)
+    upload_start_date: datetime = Field(default_factory=get_ist_now)
     upload_end_date: Optional[datetime] = None
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
+    last_updated: datetime = Field(default_factory=get_ist_now)
 
 class Image(SQLModel, table=True):
     __tablename__ = "image"
@@ -185,7 +188,7 @@ class Image(SQLModel, table=True):
     converted_file_type: Optional[FileType] = None
     conversion_status: ConversionStatus = Field(default=ConversionStatus.Tiff_Received)
     file_size_bytes: Optional[int] = None
-    upload_date: datetime = Field(default_factory=datetime.utcnow)
+    upload_date: datetime = Field(default_factory=get_ist_now)
 
 class QCAllocation(SQLModel, table=True):
     __tablename__ = "qc_allocation"
@@ -193,9 +196,15 @@ class QCAllocation(SQLModel, table=True):
     batch_uid: UUID = Field(foreign_key="batch.batch_uid")
     allocated_to_qc_user: UUID = Field(foreign_key="users.user_id")
     allocated_by_supervisor: UUID = Field(foreign_key="users.user_id")
-    allocation_date: datetime = Field(default_factory=datetime.utcnow)
+    allocation_date: datetime = Field(default_factory=get_ist_now)
     qc_batch_status: QCBatchStatus = Field(default=QCBatchStatus.Allocated)
     qc_completed_date: Optional[datetime] = None
+
+class QCStatus(str, Enum):
+    Pending = "Pending"
+    Approved = "Approved"
+    Rejected = "Rejected"
+    Flagged = "Flagged"
 
 class QC(SQLModel, table=True):
     __tablename__ = "qc"
@@ -205,4 +214,21 @@ class QC(SQLModel, table=True):
     qc_status: QCStatus = Field(default=QCStatus.Pending)
     orientation_error: bool = Field(default=False)
     remarks: Optional[str] = None
-    qc_date: datetime = Field(default_factory=datetime.utcnow)
+    qc_date: datetime = Field(default_factory=get_ist_now)
+
+class NotificationType(str, Enum):
+    Batch_Uploaded = "batch_uploaded"
+    QC_Assigned = "qc_assigned"
+    Batch_Rejected = "batch_rejected"
+    Conversion_Complete = "conversion_complete"
+
+class Notification(SQLModel, table=True):
+    __tablename__ = "notifications"
+    notification_id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: UUID = Field(foreign_key="users.user_id", index=True)
+    type: NotificationType
+    title: str
+    message: str
+    link: Optional[str] = None
+    is_read: bool = Field(default=False)
+    created_date: datetime = Field(default_factory=get_ist_now)

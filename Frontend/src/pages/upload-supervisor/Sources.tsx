@@ -256,7 +256,7 @@ const Sources: React.FC = () => {
     return (
         <div className="space-y-6 animate-fade-in">
             <PageHeader
-                title="Sources (Upload Supervisor)"
+                title="Sources (Upload Manager)"
                 description="Manage document sources for assigned projects"
                 action={{ label: 'Add Source', onClick: handleCreate }}
             />

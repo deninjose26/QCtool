@@ -23,7 +23,9 @@ import { Label } from '@/components/ui/label';
 import { Trash2, Loader2, GitBranch } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
-import { formatError } from '@/lib/utils';
+import { formatError, cn } from '@/lib/utils';
+import { Switch } from '@/components/ui/switch';
+import { API_BASE_URL } from '@/config';
 
 interface Allocation {
     id: string;
@@ -39,11 +41,12 @@ interface Allocation {
     allocated_to_vendor: string;
     vendor_name: string;
     allocated_by_supervisor: string;
+    is_active: boolean;
     created_date: string;
 }
 
 const VendorAllocationPage: React.FC = () => {
-    const { user: currentUser } = useAuth();
+    const { user: currentUser, apiFetch } = useAuth();
     const { toast } = useToast();
 
     const [allocations, setAllocations] = useState<Allocation[]>([]);
@@ -55,7 +58,7 @@ const VendorAllocationPage: React.FC = () => {
 
     const [isLoading, setIsLoading] = useState(true);
     const [isDialogOpen, setIsDialogOpen] = useState(false);
-
+    const [editingAllocation, setEditingAllocation] = useState<Allocation | null>(null);
     const [formData, setFormData] = useState({
         project_id: '',
         source_id: '',
@@ -67,15 +70,14 @@ const VendorAllocationPage: React.FC = () => {
     const fetchData = async () => {
         try {
             setIsLoading(true);
-            const headers = { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` };
 
             const [allUsers, allProjects, allSources, allLocations, allROs, allAllocations] = await Promise.all([
-                fetch('http://localhost:8000/admin/users', { headers }).then(r => r.json()),
-                fetch('http://localhost:8000/admin/projects', { headers }).then(r => r.json()),
-                fetch('http://localhost:8000/admin/sources', { headers }).then(r => r.json()),
-                fetch('http://localhost:8000/admin/locations', { headers }).then(r => r.json()),
-                fetch('http://localhost:8000/admin/record-owners', { headers }).then(r => r.json()),
-                fetch('http://localhost:8000/upload-sup/allocations', { headers }).then(r => r.json()),
+                apiFetch(`${API_BASE_URL}/admin/users`).then(r => r.json()),
+                apiFetch(`${API_BASE_URL}/admin/projects`).then(r => r.json()),
+                apiFetch(`${API_BASE_URL}/admin/sources`).then(r => r.json()),
+                apiFetch(`${API_BASE_URL}/admin/locations`).then(r => r.json()),
+                apiFetch(`${API_BASE_URL}/admin/record-owners`).then(r => r.json()),
+                apiFetch(`${API_BASE_URL}/upload-sup/allocations`).then(r => r.json()),
             ]);
 
             setVendors(allUsers.filter((u: any) => u.user_role === 'Vendor').map((u: any) => ({
@@ -154,12 +156,25 @@ const VendorAllocationPage: React.FC = () => {
     }, []);
 
     const handleCreate = () => {
+        setEditingAllocation(null);
         setFormData({
             project_id: '',
             source_id: '',
             location_id: '',
             record_owner_id: '',
             allocated_to_vendor: '',
+        });
+        setIsDialogOpen(true);
+    };
+
+    const handleEdit = (alloc: Allocation) => {
+        setEditingAllocation(alloc);
+        setFormData({
+            project_id: alloc.project_id,
+            source_id: alloc.source_id,
+            location_id: alloc.location_id,
+            record_owner_id: alloc.record_owner_id,
+            allocated_to_vendor: alloc.allocated_to_vendor,
         });
         setIsDialogOpen(true);
     };
@@ -171,11 +186,14 @@ const VendorAllocationPage: React.FC = () => {
         }
 
         try {
-            const response = await fetch('http://localhost:8000/upload-sup/allocations', {
-                method: 'POST',
+            const url = editingAllocation
+                ? `${API_BASE_URL}/upload-sup/allocations/${editingAllocation.vendor_allocation_id}`
+                : `${API_BASE_URL}/upload-sup/allocations`;
+
+            const response = await apiFetch(url, {
+                method: editingAllocation ? 'PUT' : 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${localStorage.getItem('qc_token')}`
                 },
                 body: JSON.stringify({
                     ...formData,
@@ -184,7 +202,7 @@ const VendorAllocationPage: React.FC = () => {
             });
 
             if (response.ok) {
-                toast({ title: 'Success', description: 'Combination allocated to vendor successfully' });
+                toast({ title: 'Success', description: `Combination ${editingAllocation ? 'updated' : 'allocated'} successfully` });
                 fetchData();
                 setIsDialogOpen(false);
             } else {
@@ -196,21 +214,33 @@ const VendorAllocationPage: React.FC = () => {
         }
     };
 
-    const handleDelete = async (id: string) => {
-        if (!confirm('Are you sure you want to remove this allocation?')) return;
+    const handleToggleStatus = async (alloc: Allocation) => {
         try {
-            const response = await fetch(`http://localhost:8000/upload-sup/allocations/${id}`, {
-                method: 'DELETE',
-                headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
+            const response = await apiFetch(`${API_BASE_URL}/upload-sup/allocations/${alloc.vendor_allocation_id}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ is_active: !alloc.is_active })
             });
             if (response.ok) {
-                toast({ title: 'Success', description: 'Allocation removed' });
-                fetchData();
+                const updatedAlloc = await response.json();
+                toast({ title: 'Success', description: `Allocation ${alloc.is_active ? 'disabled' : 'enabled'}` });
+
+                // Update local state instead of full refresh
+                setAllocations(prev => prev.map(a =>
+                    a.vendor_allocation_id === alloc.vendor_allocation_id
+                        ? { ...a, is_active: updatedAlloc.is_active }
+                        : a
+                ));
+            } else {
+                toast({ title: 'Error', description: 'Failed to update status', variant: 'destructive' });
             }
         } catch (error) {
-            toast({ title: 'Error', description: 'Failed to remove', variant: 'destructive' });
+            toast({ title: 'Error', description: 'Failed to update status', variant: 'destructive' });
         }
     };
+
 
     const columns = [
         {
@@ -244,12 +274,34 @@ const VendorAllocationPage: React.FC = () => {
             )
         },
         {
+            key: 'is_active',
+            header: 'Status',
+            render: (val: boolean, item: Allocation) => (
+                <div className="flex items-center gap-2">
+                    <Switch
+                        checked={val}
+                        onCheckedChange={() => handleToggleStatus(item)}
+                    />
+                    <Badge variant={val ? "default" : "secondary"} className={val ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-800"}>
+                        {val ? 'Enabled' : 'Disabled'}
+                    </Badge>
+                </div>
+            )
+        },
+        {
             key: 'actions',
             header: 'Actions',
             render: (_: any, item: Allocation) => (
-                <Button variant="ghost" size="icon" onClick={() => handleDelete(item.vendor_allocation_id)}>
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                </Button>
+                <div className="flex gap-2">
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleEdit(item)}
+                        className="h-8 text-[10px] font-bold bg-emerald-500 text-white hover:bg-emerald-600 hover:text-white"
+                    >
+                        EDIT
+                    </Button>
+                </div>
             )
         }
     ];
@@ -280,10 +332,10 @@ const VendorAllocationPage: React.FC = () => {
                     <DialogHeader>
                         <DialogTitle className="flex items-center gap-2">
                             <GitBranch className="h-5 w-5 text-primary" />
-                            New Vendor Allocation
+                            {editingAllocation ? 'Update Vendor Allocation' : 'New Vendor Allocation'}
                         </DialogTitle>
                         <DialogDescription>
-                            Select a combination of records to assign to a specific vendor.
+                            {editingAllocation ? 'Modify the record combination for this vendor.' : 'Select a combination of records to assign to a specific vendor.'}
                         </DialogDescription>
                     </DialogHeader>
 
@@ -369,12 +421,12 @@ const VendorAllocationPage: React.FC = () => {
                         <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Cancel</Button>
                         <Button onClick={handleSubmit} className="gap-2">
                             <GitBranch className="h-4 w-4" />
-                            Complete Allocation
+                            {editingAllocation ? 'Update Allocation' : 'Complete Allocation'}
                         </Button>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
-        </div>
+        </div >
     );
 };
 

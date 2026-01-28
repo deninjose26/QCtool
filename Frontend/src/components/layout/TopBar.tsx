@@ -8,12 +8,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import defaultAvatar from '@/assets/default-avatar.png';
 import { Badge } from '@/components/ui/badge';
 import { Bell, LogOut, Settings, User, Menu, Clock, Calendar } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { roleLabels } from '@/lib/role-config';
 import { useNavigate } from 'react-router-dom';
+import NotificationBell from './NotificationBell';
 
 const LiveClock: React.FC = () => {
   const [time, setTime] = React.useState(new Date());
@@ -40,7 +42,6 @@ const TopBar: React.FC<TopBarProps> = ({ onMenuClick }) => {
 
   const handleLogout = () => {
     logout();
-    navigate('/');
   };
 
   const getInitials = (name: string) => {
@@ -101,45 +102,14 @@ const TopBar: React.FC<TopBarProps> = ({ onMenuClick }) => {
         </div>
 
         <div className="flex items-center gap-2 sm:gap-3 border-l pl-2 sm:pl-6 border-border/50">
-          {/* Notifications */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="relative h-8 w-8 sm:h-10 sm:w-10">
-                <Bell className="h-4 w-4 sm:h-5 sm:w-5" />
-                <Badge className="absolute top-0 right-0 h-4 w-4 sm:h-5 sm:w-5 flex items-center justify-center p-0 text-[10px]">
-                  3
-                </Badge>
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-80">
-              <DropdownMenuLabel>Notifications</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem className="flex flex-col items-start gap-1 cursor-pointer">
-                <span className="font-medium">New batch uploaded</span>
-                <span className="text-xs text-muted-foreground">
-                  BATCH-005 has been uploaded successfully
-                </span>
-              </DropdownMenuItem>
-              <DropdownMenuItem className="flex flex-col items-start gap-1 cursor-pointer">
-                <span className="font-medium">QC Task Assigned</span>
-                <span className="text-xs text-muted-foreground">
-                  You have been assigned a new QC task
-                </span>
-              </DropdownMenuItem>
-              <DropdownMenuItem className="flex flex-col items-start gap-1 cursor-pointer">
-                <span className="font-medium">Batch Rejected</span>
-                <span className="text-xs text-muted-foreground">
-                  BATCH-003 requires re-upload
-                </span>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <NotificationBell />
 
           {/* User Menu */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" className="flex items-center gap-2 px-1 sm:px-2 h-8 sm:h-10">
                 <Avatar className="h-6 w-6 sm:h-8 sm:w-8">
+                  <AvatarImage src={user?.avatar || defaultAvatar} />
                   <AvatarFallback className="bg-primary text-primary-foreground text-[10px] sm:text-sm">
                     {user ? getInitials(user.name) : 'U'}
                   </AvatarFallback>
@@ -155,11 +125,11 @@ const TopBar: React.FC<TopBarProps> = ({ onMenuClick }) => {
             <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuLabel>My Account</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              <DropdownMenuItem className="cursor-pointer">
+              <DropdownMenuItem className="cursor-pointer" onClick={() => navigate('/profile')}>
                 <User className="mr-2 h-4 w-4" />
                 Profile
               </DropdownMenuItem>
-              <DropdownMenuItem className="cursor-pointer">
+              <DropdownMenuItem className="cursor-pointer" onClick={() => navigate('/settings')}>
                 <Settings className="mr-2 h-4 w-4" />
                 Settings
               </DropdownMenuItem>

@@ -1,13 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select
-from datetime import timedelta
+from datetime import timedelta, datetime
 from uuid import UUID
 from pydantic import BaseModel
 from common.database import get_session
 from common.models import User, UserRole
 from common.security import get_password_hash, verify_password, create_access_token
 from common.email_utils import send_welcome_email
+from common.auth_utils import get_current_user
 from fastapi import BackgroundTasks
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -39,7 +40,7 @@ def register(
     user_data: UserCreate, 
     background_tasks: BackgroundTasks, 
     session: Session = Depends(get_session),
-    current_role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor, UserRole.Vendor]))
+    current_role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor, UserRole.Vendor, UserRole.QC_Supervisor]))
 ):
     print(f"Registration request by {current_role} for {user_data.username} as {user_data.user_role}")
     
@@ -55,6 +56,20 @@ def register(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Vendors are restricted to creating Scanning Operator accounts only."
+        )
+
+    # Restriction: QC_Supervisor can ONLY create QC Users
+    if current_role == UserRole.QC_Supervisor and user_data.user_role != UserRole.QC_User:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="QC Supervisors are restricted to creating QC User accounts only."
+        )
+
+    # Restriction: SuperAdmin can NOT create Scanning Operators
+    if current_role == UserRole.SuperAdmin and user_data.user_role == UserRole.Scanning_Operator:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="SuperAdmins are not authorized to create Scanning Operator accounts. These are managed by Vendors."
         )
 
     # Check if user already exists
@@ -109,3 +124,190 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), session: Session = D
         "role": user.user_role
     }
 
+
+# --- Enhanced Schemas ---
+class UpdateProfileRequest(BaseModel):
+    name: str
+    username: str
+    email: str
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+    confirm_password: str
+
+@router.put("/profile/update", response_model=User)
+def update_profile(
+    profile_data: UpdateProfileRequest,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Update current user's profile details"""
+    # Check if username/email is taken by someone else
+    existing_username = session.exec(select(User).where(User.username == profile_data.username).where(User.user_id != current_user.user_id)).first()
+    if existing_username:
+        raise HTTPException(status_code=400, detail="Username already taken")
+        
+    existing_email = session.exec(select(User).where(User.email == profile_data.email).where(User.user_id != current_user.user_id)).first()
+    if existing_email:
+        raise HTTPException(status_code=400, detail="Email already taken")
+
+    current_user.name = profile_data.name
+    current_user.username = profile_data.username
+    current_user.email = profile_data.email
+    current_user.last_updated = datetime.utcnow() # Use UTC directly or helper
+    
+    session.add(current_user)
+    session.commit()
+    session.refresh(current_user)
+    return current_user
+
+@router.post("/profile/change-password")
+def change_password(
+    password_data: ChangePasswordRequest,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Change current user's password"""
+    if not verify_password(password_data.current_password, current_user.password_hash):
+        raise HTTPException(status_code=400, detail="Incorrect current password")
+        
+    if password_data.new_password != password_data.confirm_password:
+        raise HTTPException(status_code=400, detail="New passwords do not match")
+        
+    current_user.password_hash = get_password_hash(password_data.new_password)
+    current_user.last_updated = datetime.utcnow()
+    
+    session.add(current_user)
+    session.commit()
+    
+    return {"message": "Password updated successfully"}
+
+from fastapi import File, UploadFile
+import boto3
+import os
+from botocore.client import Config
+
+@router.post("/profile/upload-picture")
+async def upload_profile_picture(
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Upload a profile picture to S3"""
+    # 1. Validate file type (basic check)
+    if file.content_type not in ["image/jpeg", "image/png", "image/jpg"]:
+        raise HTTPException(status_code=400, detail="Only JPEG/PNG images are allowed")
+    
+    # 2. Prepare S3 Key
+    file_extension = file.filename.split('.')[-1]
+    base_folder = os.getenv('Base_folder', 'FamilyaConnect-QCTool')
+    s3_key = f"{base_folder}/USERPROFILES/{current_user.user_id}.{file_extension}"
+    
+    # 3. Upload to S3
+    s3_client = boto3.client(
+        's3',
+        endpoint_url=os.getenv('ENDPOINT_URL'),
+        aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+        aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+        region_name=os.getenv('AWS_REGION'),
+        config=Config(signature_version='s3v4')
+    )
+    
+    try:
+        s3_client.upload_fileobj(
+            file.file,
+            os.getenv('S3_BUCKET_NAME'),
+            s3_key,
+            ExtraArgs={'ContentType': file.content_type}
+        )
+    except Exception as e:
+        print(f"Profile upload failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to upload image to storage")
+        
+    # 4. Generate Presigned URL for immediate display (Optional return)
+    # But crucially, save the key to DB
+    current_user.profile_picture_path = s3_key
+    session.add(current_user)
+    session.commit()
+    session.refresh(current_user)
+    
+    # Generate a fresh URL to return
+    presigned_url = s3_client.generate_presigned_url(
+        'get_object',
+        Params={
+            'Bucket': os.getenv('S3_BUCKET_NAME'),
+            'Key': s3_key
+        },
+        ExpiresIn=3600 * 24 # 24 hours
+    )
+
+    return {
+        "message": "Profile picture uploaded successfully",
+        "profile_picture_path": s3_key,
+        "presigned_url": presigned_url
+    }
+
+@router.get("/profile/me/picture")
+def get_my_profile_picture(
+    current_user: User = Depends(get_current_user)
+):
+    """Get presigned URL for current user's profile picture"""
+    if not current_user.profile_picture_path:
+        return {"url": None}
+        
+    s3_client = boto3.client(
+        's3',
+        endpoint_url=os.getenv('ENDPOINT_URL'),
+        aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+        aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+        region_name=os.getenv('AWS_REGION'),
+        config=Config(signature_version='s3v4')
+    )
+    
+    try:
+        url = s3_client.generate_presigned_url(
+            'get_object',
+            Params={
+                'Bucket': os.getenv('S3_BUCKET_NAME'),
+                'Key': current_user.profile_picture_path
+            },
+            ExpiresIn=3600 * 12
+        )
+        return {"url": url}
+    except Exception:
+        return {"url": None}
+
+
+class EmailNotificationPreference(BaseModel):
+    enabled: bool
+
+
+@router.put("/profile/email-notifications")
+def update_email_notifications(
+    preference: EmailNotificationPreference,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Toggle email notifications for current user"""
+    current_user.email_notifications_enabled = preference.enabled
+    current_user.last_updated = datetime.utcnow()
+    
+    session.add(current_user)
+    session.commit()
+    session.refresh(current_user)
+    
+    return {
+        "message": f"Email notifications {'enabled' if preference.enabled else 'disabled'} successfully",
+        "email_notifications_enabled": current_user.email_notifications_enabled
+    }
+
+
+@router.get("/profile/email-notifications")
+def get_email_notification_status(
+    current_user: User = Depends(get_current_user)
+):
+    """Get current email notification preference"""
+    return {
+        "email_notifications_enabled": current_user.email_notifications_enabled
+    }

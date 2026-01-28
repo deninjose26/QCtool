@@ -9,3 +9,6 @@ python-dotenv
 alembic
 asyncpg
 httpx
+boto3
+APScheduler==3.10.4
+pytz==2024.1
