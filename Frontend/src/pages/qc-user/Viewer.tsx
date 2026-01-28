@@ -28,11 +28,17 @@ import {
   CheckCircle2,
   RefreshCw,
   Maximize,
-  Minimize
+  Minimize,
+  AlertCircle,
+  FileSearch,
+  CheckCircle,
+  Clock
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { API_BASE_URL } from '@/config';
 import { cn } from '@/lib/utils';
+import { useNetworkStatus } from '@/hooks/useNetworkStatus';
+import { syncManager } from '@/utils/syncManager';
 
 interface QCImage {
   qc_id: string;
@@ -43,6 +49,7 @@ interface QCImage {
   qc_status: 'Pending' | 'Approved' | 'Rejected';
   orientation_error: boolean;
   remarks: string | null;
+  conversion_status?: string;
 }
 
 const REJECTION_REASONS = [
@@ -60,6 +67,7 @@ const QCPanel: React.FC = () => {
   const { toast } = useToast();
   const token = localStorage.getItem('qc_token');
   const viewerRef = useRef<HTMLDivElement>(null);
+  const { isOnline } = useNetworkStatus();
 
   const [images, setImages] = useState<QCImage[]>([]);
   const [filteredImages, setFilteredImages] = useState<QCImage[]>([]);
@@ -67,6 +75,7 @@ const QCPanel: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
+  const [imageError, setImageError] = useState(false);
 
   // QC Decision State
   const [showRejectForm, setShowRejectForm] = useState(false);
@@ -219,34 +228,44 @@ const QCPanel: React.FC = () => {
   const submitDecision = async (status: 'Approved' | 'Rejected', remarks?: string) => {
     if (!currentImage) return;
 
+    const payload = {
+      qc_status: status,
+      orientation_error: orientationIssue,
+      remarks: remarks || null
+    };
+
     try {
-      const res = await fetch(`${API_BASE_URL}/qc/decision/${currentImage.qc_id}`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          qc_status: status,
-          orientation_error: orientationIssue,
-          remarks: remarks || null
-        })
-      });
+      if (!isOnline) {
+        // Save to offline sync queue
+        await syncManager.addToQueue('create', `${API_BASE_URL}/qc/decision/${currentImage.qc_id}`, payload);
 
-      if (!res.ok) throw new Error('Failed to submit decision');
+        // Update local state immediately for optimistic UI
+        updateLocalState(status, remarks);
 
-      // Update local state
-      setImages(images.map(img =>
-        img.qc_id === currentImage.qc_id
-          ? { ...img, qc_status: status, orientation_error: orientationIssue, remarks: remarks || null }
-          : img
-      ));
+        toast({
+          title: `Image ${status.toLowerCase()} (Saved Offline)`,
+          description: "Your decision will be synced once you're back online."
+        });
 
-      toast({ title: `Image ${status.toLowerCase()}` });
+        moveToNext();
+      } else {
+        const res = await fetch(`${API_BASE_URL}/qc/decision/${currentImage.qc_id}`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        });
 
-      // Move to next image if viewing all or still matches specific filter
-      if (currentIndex < filteredImages.length - 1) {
-        setCurrentIndex(currentIndex + 1);
+        if (!res.ok) throw new Error('Failed to submit decision');
+
+        // Update local state
+        updateLocalState(status, remarks);
+
+        toast({ title: `Image ${status.toLowerCase()}` });
+
+        moveToNext();
       }
 
       // Reset form
@@ -260,6 +279,21 @@ const QCPanel: React.FC = () => {
     }
   };
 
+  const updateLocalState = (status: 'Approved' | 'Rejected', remarks?: string) => {
+    if (!currentImage) return;
+    setImages(images.map(img =>
+      img.qc_id === currentImage.qc_id
+        ? { ...img, qc_status: status, orientation_error: orientationIssue, remarks: remarks || null }
+        : img
+    ));
+  };
+
+  const moveToNext = () => {
+    if (currentIndex < filteredImages.length - 1) {
+      setCurrentIndex(currentIndex + 1);
+    }
+  };
+
   const handleMarkComplete = async () => {
     if (!allocationId) return;
 
@@ -267,24 +301,38 @@ const QCPanel: React.FC = () => {
       return;
     }
 
+    const endpoint = `${API_BASE_URL}/qc/complete-task/${allocationId}`;
+
     setIsFinalizing(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/qc/complete-task/${allocationId}`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      if (!isOnline) {
+        // Save to offline sync queue
+        await syncManager.addToQueue('create', endpoint, {});
 
-      if (!res.ok) throw new Error('Failed to complete task');
+        toast({
+          title: 'Task Marked Complete (Offline)',
+          description: 'Batch will be moved to QC History once you\'re back online.',
+        });
 
-      toast({
-        title: 'Task Completed',
-        description: 'Batch has been moved to QC History.',
-      });
+        navigate('/tasks');
+      } else {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
 
-      navigate('/tasks');
+        if (!res.ok) throw new Error('Failed to complete task');
+
+        toast({
+          title: 'Task Completed',
+          description: 'Batch has been moved to QC History.',
+        });
+
+        navigate('/tasks');
+      }
     } catch (error) {
       console.error(error);
       toast({
@@ -603,31 +651,66 @@ const QCPanel: React.FC = () => {
                       "min-h-full min-w-full flex transition-all duration-300 relative",
                       zoom > 1 ? "items-start justify-center pt-8" : "items-center justify-center"
                     )}>
-                      <div
-                        className={cn(
-                          "relative transition-all duration-300 flex flex-shrink-0 items-center justify-center",
-                          zoom > 1 ? "p-12" : ""
-                        )}
-                        style={{
-                          width: zoom > 1 ? 'fit-content' : '100%',
-                          height: zoom > 1 ? 'fit-content' : '100%',
-                          margin: '0 auto'
-                        }}
-                      >
-                        <img
-                          src={currentImage.qc_s3_path || currentImage.original_s3_path}
-                          alt={currentImage.image_name}
-                          className="transition-all duration-300 shadow-lg bg-white"
+                      {!currentImage.qc_s3_path || imageError ? (
+                        <div className="flex flex-col items-center justify-center p-12 text-center max-w-md animate-in fade-in zoom-in duration-300">
+                          <div className="w-20 h-20 rounded-full bg-slate-300/50 flex items-center justify-center mb-6 ring-8 ring-slate-100 flex-shrink-0">
+                            {currentImage.conversion_status === 'Jpeg_Converting' ? (
+                              <RefreshCw className="h-10 w-10 text-slate-500 animate-spin" />
+                            ) : currentImage.conversion_status === 'Failed' ? (
+                              <AlertCircle className="h-10 w-10 text-red-500" />
+                            ) : (
+                              <Clock className="h-10 w-10 text-slate-500 animate-pulse" />
+                            )}
+                          </div>
+                          <h3 className="text-xl font-bold text-slate-800 mb-2">
+                            {currentImage.conversion_status === 'Jpeg_Converting' ? 'Optimization in Progress' :
+                              currentImage.conversion_status === 'Failed' ? 'Conversion Failed' : 'JPEG Quality Optimization Pending'}
+                          </h3>
+                          <p className="text-sm text-slate-500 leading-relaxed font-medium">
+                            {currentImage.conversion_status === 'Failed' ?
+                              'The image could not be optimized for web viewing. Please contact system admin.' :
+                              'Please wait while we optimize this image for quality-check viewing. This usually takes just a few seconds.'}
+                          </p>
+                          <div className="mt-8 flex gap-3">
+                            <Button variant="outline" size="sm" onClick={() => window.location.reload()} className="bg-white hover:bg-slate-50">
+                              <RefreshCw className="h-3.5 w-3.5 mr-2" /> Retry Now
+                            </Button>
+                            <a href={currentImage.original_s3_path} target="_blank" rel="noreferrer">
+                              <Button variant="secondary" size="sm" className="bg-slate-800 text-white hover:bg-slate-900">
+                                <FileSearch className="h-3.5 w-3.5 mr-2" /> View Original TIFF
+                              </Button>
+                            </a>
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          className={cn(
+                            "relative transition-all duration-300 flex flex-shrink-0 items-center justify-center",
+                            zoom > 1 ? "p-12" : ""
+                          )}
                           style={{
-                            transform: `rotate(${rotation}deg)`,
-                            maxHeight: isFullscreen ? `calc(${zoom} * (100vh - 120px))` : `${zoom * 600}px`,
-                            maxWidth: zoom > 1 ? 'none' : '100%',
-                            width: 'auto',
-                            height: 'auto',
-                            display: 'block'
+                            width: zoom > 1 ? 'fit-content' : '100%',
+                            height: zoom > 1 ? 'fit-content' : '100%',
+                            margin: '0 auto'
                           }}
-                        />
-                      </div>
+                        >
+                          <img
+                            src={currentImage.qc_s3_path}
+                            alt={currentImage.image_name}
+                            onError={() => setImageError(true)}
+                            onLoad={() => setImageError(false)}
+                            className="transition-all duration-300 shadow-lg bg-white"
+                            style={{
+                              transform: `rotate(${rotation}deg)`,
+                              maxHeight: isFullscreen ? `calc(${zoom} * (100vh - 120px))` : `${zoom * 600}px`,
+                              maxWidth: zoom > 1 ? 'none' : '100%',
+                              width: 'auto',
+                              height: 'auto',
+                              display: 'block'
+                            }}
+                          />
+                        </div>
+                      )}
 
                       {currentImage.qc_status === 'Approved' && (
                         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">

@@ -66,6 +66,7 @@ class Project(SQLModel, table=True):
     project_id: UUID = Field(default_factory=uuid4, primary_key=True)
     project_code: str = Field(unique=True, index=True)
     project_name: str
+    description: Optional[str] = None
     created_by: UUID = Field(foreign_key="users.user_id")
     created_date: datetime = Field(default_factory=get_ist_now)
     last_updated: datetime = Field(default_factory=get_ist_now)

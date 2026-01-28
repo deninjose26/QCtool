@@ -127,7 +127,9 @@ def main(args):
             }
         
         # 6. Build QC path (same hierarchy, different extension)
-        qc_path = original_path.replace('.tif', '.jpg').replace('.tiff', '.jpg').replace('.TIF', '.jpg').replace('.TIFF', '.jpg')
+        # Fix: Better way to replace extension that doesn't cause .jpgh for .tiff files
+        base, _ = os.path.splitext(original_path)
+        qc_path = f"{base}.jpg"
         print(f"[INFO] QC path: {qc_path}")
         
         # 7. Upload JPEG to QC bucket (using QC credentials)
@@ -181,20 +183,38 @@ def main(args):
                 }
             }
             
-            webhook_response = requests.post(
-                webhook_url,
-                json=webhook_payload,
-                headers={
-                    'X-API-Key': os.environ.get('API_WEBHOOK_SECRET'),
-                    'Content-Type': 'application/json'
-                },
-                timeout=10
-            )
+            # Retry logic for webhook notification
+            max_retries = 3
+            retry_count = 0
+            success = False
             
-            if webhook_response.status_code == 200:
-                print(f"[INFO] Successfully notified backend")
-            else:
-                print(f"[WARNING] Backend notification failed: {webhook_response.status_code}")
+            while retry_count < max_retries and not success:
+                try:
+                    webhook_response = requests.post(
+                        webhook_url,
+                        json=webhook_payload,
+                        headers={
+                            'X-API-Key': os.environ.get('API_WEBHOOK_SECRET'),
+                            'Content-Type': 'application/json'
+                        },
+                        timeout=15
+                    )
+                    
+                    if webhook_response.status_code == 200:
+                        print(f"[INFO] Successfully notified backend")
+                        success = True
+                    else:
+                        print(f"[WARNING] Backend notification returned {webhook_response.status_code} (Retry {retry_count+1}/{max_retries})")
+                except Exception as e:
+                    print(f"[WARNING] Webhook attempt {retry_count+1} failed: {str(e)}")
+                
+                if not success:
+                    retry_count += 1
+                    import time
+                    time.sleep(2 ** retry_count) # Exponential backoff
+            
+            if not success:
+                print(f"[ERROR] Failed to notify backend after {max_retries} attempts.")
                 
         except Exception as e:
             print(f"[WARNING] Failed to notify backend (non-critical): {str(e)}")

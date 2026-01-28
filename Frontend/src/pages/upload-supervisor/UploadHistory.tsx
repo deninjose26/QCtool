@@ -206,6 +206,12 @@ const SupervisorUploadHistory: React.FC = () => {
     };
 
     const columns = [
+        { key: 'project_name', header: 'Project', sortable: true },
+        { key: 'source_name', header: 'Source', sortable: true },
+        { key: 'location_name', header: 'Location', sortable: true },
+        { key: 'record_owner_name', header: 'Owner', sortable: true },
+        { key: 'record_type_name', header: 'Type', sortable: true },
+        { key: 'book_name', header: 'Book', sortable: true },
         {
             key: 'batch_id',
             header: 'Batch ID',
@@ -221,13 +227,8 @@ const SupervisorUploadHistory: React.FC = () => {
                 </code>
             )
         },
-        { key: 'project_name', header: 'Project' },
-        { key: 'source_name', header: 'Source' },
-        { key: 'vendor_name', header: 'Vendor' },
-        { key: 'operator_name', header: 'Operator' },
-        { key: 'location_name', header: 'Location' },
-        { key: 'record_owner_name', header: 'Record Owner' },
-        { key: 'record_type_name', header: 'Record Type' },
+        { key: 'vendor_name', header: 'Vendor', sortable: true },
+        { key: 'operator_name', header: 'Operator', sortable: true },
         {
             key: 'upload_type',
             header: 'Upload Type',

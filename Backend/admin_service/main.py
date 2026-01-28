@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlmodel import Session, select, func, col
 from pydantic import BaseModel
 from common.database import get_session
@@ -12,6 +12,8 @@ from datetime import datetime
 from typing import Optional, List
 from sqlalchemy.orm import aliased
 from uuid import UUID
+import os
+import httpx
 
 router = APIRouter(prefix="/admin", tags=["Project Management"])
 
@@ -19,10 +21,11 @@ router = APIRouter(prefix="/admin", tags=["Project Management"])
 class ProjectCreate(BaseModel):
     project_code: str | None = None
     project_name: str
+    description: str | None = None
     created_by: UUID
-
 class ProjectUpdate(BaseModel):
     project_name: str
+    description: str | None = None
 
 @router.get("/")
 def read_root():
@@ -95,6 +98,7 @@ def create_project(
     db_project = Project(
         project_code=project_code,
         project_name=project_name_upper,
+        description=project_data.description,
         created_by=project_data.created_by
     )
     session.add(db_project)
@@ -124,6 +128,7 @@ def update_project(
         raise HTTPException(status_code=404, detail="Project not found")
     
     db_project.project_name = project_data.project_name.strip()
+    db_project.description = project_data.description
     session.add(db_project)
     session.commit()
     session.refresh(db_project)
@@ -924,3 +929,86 @@ def get_admin_dashboard_stats(
         "recent_uploads": formatted_uploads,
         "recent_qc": formatted_qc
     }
+
+# --- Maintenance Operations ---
+
+async def trigger_conversion_task(image_id: str, s3_path: str):
+    """Trigger serverless conversion with state tracking."""
+    from common.models import ConversionStatus
+    from common.database import engine
+    
+    function_url = os.getenv('DO_FUNCTION_CONVERT_URL')
+    if not function_url or function_url == 'https://placeholder-will-update-later.com':
+        return
+
+    # Mark as Converting
+    with Session(engine) as session:
+        img = session.get(Image, UUID(image_id))
+        if img:
+            img.conversion_status = ConversionStatus.Jpeg_Converting
+            session.add(img)
+            session.commit()
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            await client.post(
+                function_url,
+                json={
+                    "image_id": image_id,
+                    "original_path": s3_path,
+                    "original_bucket": os.getenv('S3_BUCKET_NAME'),
+                    "qc_bucket": os.getenv('QC_S3_BUCKET_NAME'),
+                    "api_secret": os.getenv('API_WEBHOOK_SECRET')
+                }
+            )
+    except Exception as e:
+        print(f"[ERROR] Admin conversion trigger failed for {image_id}: {str(e)}")
+
+@router.post("/maintenance/sync-conversions")
+async def sync_all_conversions(
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Trigger all stuck conversions (Self-healing option)"""
+    if current_user.user_role != UserRole.SuperAdmin:
+        raise HTTPException(status_code=403, detail="SuperAdmin access only.")
+
+    from common.models import ConversionStatus
+    
+    statement = select(Image).where(
+        Image.conversion_status.in_([ConversionStatus.Tiff_Received, ConversionStatus.Jpeg_Converting])
+    )
+    stuck_images = session.exec(statement).all()
+    
+    for img in stuck_images:
+        background_tasks.add_task(trigger_conversion_task, str(img.image_id), img.original_s3_path)
+        
+    return {"message": f"Queued {len(stuck_images)} images for re-conversion."}
+
+@router.post("/maintenance/trigger-batch/{batch_uid}")
+async def trigger_batch_conversion(
+    batch_uid: UUID,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Trigger conversion ONLY for missing/stuck images in a specific batch"""
+    if current_user.user_role != UserRole.SuperAdmin:
+        raise HTTPException(status_code=403, detail="SuperAdmin access only.")
+
+    from common.models import ConversionStatus
+    
+    # Only pick images that are NOT yet 'Jpeg_Converted'
+    images = session.exec(
+        select(Image)
+        .where(Image.batch_uid == batch_uid)
+        .where(Image.conversion_status.in_([ConversionStatus.Tiff_Received, ConversionStatus.Jpeg_Converting]))
+    ).all()
+    
+    triggered_count = 0
+    for img in images:
+        background_tasks.add_task(trigger_conversion_task, str(img.image_id), img.original_s3_path)
+        triggered_count += 1
+        
+    return {"message": f"Queued {triggered_count} missing images from batch {batch_uid} for conversion."}

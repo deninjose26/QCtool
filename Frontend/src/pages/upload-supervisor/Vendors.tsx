@@ -18,6 +18,7 @@ import { Edit, Trash2, Loader2, Eye, EyeOff } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { formatError } from '@/lib/utils';
+import { API_BASE_URL } from '@/config';
 
 const VendorManagement: React.FC = () => {
   const { user: currentUser } = useAuth();
@@ -37,7 +38,7 @@ const VendorManagement: React.FC = () => {
   const fetchVendors = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch('http://localhost:8000/admin/users', {
+      const response = await fetch(`${API_BASE_URL}/admin/users`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
       });
       if (response.ok) {
@@ -95,7 +96,7 @@ const VendorManagement: React.FC = () => {
 
     try {
       if (editingUser) {
-        const response = await fetch(`http://localhost:8000/admin/users/${editingUser.id}`, {
+        const response = await fetch(`${API_BASE_URL}/admin/users/${editingUser.id}`, {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
@@ -117,7 +118,7 @@ const VendorManagement: React.FC = () => {
           toast({ title: 'Error', description: formatError(error.detail), variant: 'destructive' });
         }
       } else {
-        const response = await fetch('http://localhost:8000/auth/register', {
+        const response = await fetch(`${API_BASE_URL}/auth/register`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -152,7 +153,7 @@ const VendorManagement: React.FC = () => {
     if (!confirm('Are you sure you want to delete this vendor?')) return;
 
     try {
-      const response = await fetch(`http://localhost:8000/admin/users/${id}`, {
+      const response = await fetch(`${API_BASE_URL}/admin/users/${id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
       });

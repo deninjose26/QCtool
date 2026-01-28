@@ -25,6 +25,7 @@ import { Edit, Trash2, Loader2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { formatError } from '@/lib/utils';
+import { API_BASE_URL } from '@/config';
 
 const Locations: React.FC = () => {
   const { user } = useAuth();
@@ -40,7 +41,7 @@ const Locations: React.FC = () => {
 
   const fetchUsers = async () => {
     try {
-      const response = await fetch('http://localhost:8000/admin/users', {
+      const response = await fetch(`${API_BASE_URL}/admin/users`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
       });
       if (response.ok) {
@@ -58,7 +59,7 @@ const Locations: React.FC = () => {
 
   const fetchProjects = async () => {
     try {
-      const response = await fetch('http://localhost:8000/admin/projects', {
+      const response = await fetch(`${API_BASE_URL}/admin/projects`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
       });
       if (response.ok) {
@@ -74,7 +75,7 @@ const Locations: React.FC = () => {
 
   const fetchSources = async () => {
     try {
-      const response = await fetch('http://localhost:8000/admin/sources', {
+      const response = await fetch(`${API_BASE_URL}/admin/sources`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
       });
       if (response.ok) {
@@ -92,7 +93,7 @@ const Locations: React.FC = () => {
   const fetchLocations = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch('http://localhost:8000/admin/locations', {
+      const response = await fetch(`${API_BASE_URL}/admin/locations`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
       });
       if (response.ok) {
@@ -163,8 +164,8 @@ const Locations: React.FC = () => {
 
     try {
       const url = editingLocation
-        ? `http://localhost:8000/admin/locations/${editingLocation.id}`
-        : 'http://localhost:8000/admin/locations';
+        ? `${API_BASE_URL}/admin/locations/${editingLocation.id}`
+        : `${API_BASE_URL}/admin/locations`;
 
       const method = editingLocation ? 'PUT' : 'POST';
       const body = editingLocation
@@ -203,7 +204,7 @@ const Locations: React.FC = () => {
     if (!confirm('Are you sure you want to delete this location?')) return;
 
     try {
-      const response = await fetch(`http://localhost:8000/admin/locations/${id}`, {
+      const response = await fetch(`${API_BASE_URL}/admin/locations/${id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
       });
@@ -226,10 +227,10 @@ const Locations: React.FC = () => {
     : sources;
 
   const columns = [
-    { key: 'code', header: 'Code', sortable: true },
-    { key: 'name', header: 'Location Name', sortable: true },
-    { key: 'sourceName', header: 'Source', sortable: true },
     { key: 'projectName', header: 'Project', sortable: true },
+    { key: 'sourceName', header: 'Source', sortable: true },
+    { key: 'name', header: 'Location Name', sortable: true },
+    { key: 'code', header: 'Code', sortable: true },
     {
       key: 'status',
       header: 'Status',
@@ -319,15 +320,6 @@ const Locations: React.FC = () => {
                   ))}
                 </SelectContent>
               </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="code">Location Code</Label>
-              <Input
-                id="code"
-                value={editingLocation ? formData.code : 'Auto-generated (e.g., L001)'}
-                disabled
-                className="bg-muted"
-              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="name">Location Name</Label>

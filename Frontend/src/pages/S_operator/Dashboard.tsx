@@ -130,14 +130,14 @@ const ScanningOperatorDashboard: React.FC = () => {
                             </div>
                         </div>
 
-                        <div className="space-y-10">
+                        <div className="space-y-8">
                             <div className="flex items-end justify-between">
                                 <div className="space-y-1">
-                                    <p className="text-6xl font-black text-slate-900 tracking-tighter">{stats.metrics.total_batches}</p>
-                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1">Batches Processed</p>
+                                    <p className="text-4xl font-black text-slate-900 tracking-tighter">{stats.metrics.total_batches}</p>
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-0.5">Batches Processed</p>
                                 </div>
-                                <div className="text-right space-y-2">
-                                    <p className="text-4xl font-black text-violet-600 tracking-tighter">{stats.metrics.uploaded_images.toLocaleString()}</p>
+                                <div className="text-right space-y-1">
+                                    <p className="text-2xl font-black text-violet-600 tracking-tighter">{stats.metrics.uploaded_images.toLocaleString()}</p>
                                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Images</p>
                                 </div>
                             </div>
@@ -164,22 +164,22 @@ const ScanningOperatorDashboard: React.FC = () => {
                     <div className="absolute bottom-4 right-4 opacity-5 group-hover:scale-125 transition-transform duration-1000">
                         <ShieldCheck className="h-32 w-32 text-emerald-100" />
                     </div>
-                    <div className="relative z-10 h-full flex flex-col justify-between">
+                    <div className="relative z-10 h-full flex flex-col justify-between items-center text-center">
                         <div>
                             <h3 className="text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] mb-4">Quality Rating</h3>
-                            <div className="flex items-baseline gap-1">
-                                <p className="text-7xl font-black text-slate-900 tracking-tighter">{stats.metrics.accuracy}</p>
-                                <span className="text-3xl font-bold text-emerald-400">%</span>
+                            <div className="flex items-baseline justify-center gap-1">
+                                <p className="text-5xl font-black text-slate-900 tracking-tighter">{stats.metrics.accuracy}</p>
+                                <span className="text-xl font-bold text-emerald-400">%</span>
                             </div>
-                            <p className="text-xs font-medium text-slate-400 mt-2">Historical Accuracy Performance</p>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-2">Accuracy Perf</p>
                         </div>
 
-                        <div className="bg-emerald-50/50 rounded-2xl p-4 border border-emerald-100 mt-8">
-                            <div className="flex items-center gap-3">
+                        <div className="bg-emerald-50/50 rounded-2xl p-4 border border-emerald-100 mt-8 w-full">
+                            <div className="flex items-center justify-center gap-3">
                                 <div className="h-10 w-10 rounded-2xl bg-white flex items-center justify-center text-emerald-600 shadow-md">
                                     <CheckCircle2 className="h-5 w-5" />
                                 </div>
-                                <div>
+                                <div className="text-left">
                                     <p className="text-[10px] font-bold text-emerald-400 uppercase">Status</p>
                                     <p className="text-xs font-black tracking-tight text-slate-700">EXCELLENT GRADE</p>
                                 </div>
@@ -217,7 +217,7 @@ const ScanningOperatorDashboard: React.FC = () => {
                                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Historical records</p>
                                 </div>
                             </div>
-                            <p className="text-2xl font-black text-slate-900 tracking-tighter">{stats.metrics.uploaded_images.toLocaleString()}</p>
+                            <p className="text-xl font-black text-slate-900 tracking-tighter">{stats.metrics.uploaded_images.toLocaleString()}</p>
                         </div>
                     </div>
                 </Card>
@@ -291,23 +291,23 @@ const ScanningOperatorDashboard: React.FC = () => {
 
             {/* Rework Highlight */}
             {stats.metrics.rework_batches > 0 && (
-                <div className="p-1 w-full bg-gradient-to-r from-rose-500 via-orange-400 to-rose-500 rounded-[2.5rem] mt-10 shadow-2xl shadow-rose-200/50 animate-pulse">
-                    <div className="bg-white rounded-[2.3rem] p-8 flex flex-col md:flex-row items-center gap-8">
-                        <div className="h-20 w-20 rounded-[2rem] bg-rose-50 flex items-center justify-center flex-shrink-0 ring-1 ring-rose-100 shadow-inner">
-                            <RefreshCw className="h-10 w-10 text-rose-500 animate-spin-slow" />
+                <div className="p-0.5 w-full bg-gradient-to-r from-rose-500/80 to-orange-400/80 rounded-2xl mt-8 shadow-xl shadow-rose-200/40">
+                    <div className="bg-white rounded-[0.9rem] p-4 flex flex-col md:flex-row items-center gap-6">
+                        <div className="h-12 w-12 rounded-xl bg-rose-50 flex items-center justify-center flex-shrink-0 ring-1 ring-rose-100 shadow-sm">
+                            <RefreshCw className="h-6 w-6 text-rose-500 animate-spin-slow" />
                         </div>
                         <div className="flex-1 text-center md:text-left">
-                            <div className="flex items-center gap-3 justify-center md:justify-start mb-1">
-                                <Badge className="bg-rose-100 text-rose-600 hover:bg-rose-100 border-none font-black px-3 py-1 text-[10px] tracking-widest uppercase">Critical Correction</Badge>
+                            <div className="flex items-center gap-2 justify-center md:justify-start mb-0.5">
+                                <Badge className="bg-rose-100 text-rose-600 hover:bg-rose-100 border-none font-black px-2 py-0.5 text-[8px] tracking-[0.15em] uppercase">Critical Correction</Badge>
                                 <span className="h-1.5 w-1.5 rounded-full bg-rose-400 animate-ping" />
                             </div>
-                            <h4 className="text-2xl font-black text-slate-800 tracking-tighter">Resolution Required: {stats.metrics.rework_batches} Batches</h4>
-                            <p className="text-xs text-slate-400 font-bold uppercase tracking-tight mt-1">QC flags require your immediate attendance to maintain timeline integrity.</p>
+                            <h4 className="text-lg font-black text-slate-800 tracking-tight">Resolution Required: {stats.metrics.rework_batches} Batches</h4>
+                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide mt-0.5">Immediate attendance required for flagged batches.</p>
                         </div>
                         <Link to="/re-upload" className="w-full md:w-auto">
-                            <Button className="w-full md:w-[240px] bg-slate-900 text-white hover:bg-black font-black h-16 rounded-3xl shadow-2xl transition-all active:scale-95 group">
+                            <Button className="w-full md:w-[180px] bg-slate-900 text-white hover:bg-black font-black h-10 rounded-xl shadow-lg transition-all active:scale-95 group text-xs">
                                 RESOLVE NOW
-                                <ArrowRight className="ml-2 h-5 w-5 group-hover:translate-x-2 transition-transform" />
+                                <ArrowRight className="ml-2 h-4 w-4 group-hover:translate-x-1.5 transition-transform" />
                             </Button>
                         </Link>
                     </div>

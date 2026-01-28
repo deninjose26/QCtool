@@ -16,6 +16,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { roleLabels } from '@/lib/role-config';
 import { useNavigate } from 'react-router-dom';
 import NotificationBell from './NotificationBell';
+import SyncQueueBadge from '../common/SyncQueueBadge';
+import PWAInstallButton from '../common/PWAInstallButton';
 
 const LiveClock: React.FC = () => {
   const [time, setTime] = React.useState(new Date());
@@ -102,6 +104,8 @@ const TopBar: React.FC<TopBarProps> = ({ onMenuClick }) => {
         </div>
 
         <div className="flex items-center gap-2 sm:gap-3 border-l pl-2 sm:pl-6 border-border/50">
+          <PWAInstallButton />
+          <SyncQueueBadge />
           <NotificationBell />
 
           {/* User Menu */}

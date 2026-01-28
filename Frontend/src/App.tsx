@@ -15,6 +15,7 @@ import Profile from "./pages/Profile";
 import NotFound from "./pages/NotFound";
 import Notifications from "./pages/common/Notifications";
 import Documentation from "./pages/Documentation";
+import Offline from "./pages/Offline";
 
 // Admin Pages
 import Projects from "./pages/admin/Projects";
@@ -66,6 +67,11 @@ import QCReview from "./pages/qc-supervisor/QCReview";
 // Layout
 import DashboardLayout from "./components/layout/DashboardLayout";
 
+// PWA Components
+import { NetworkStatus } from "./components/common/NetworkStatus";
+import { PWAUpdatePrompt } from "./components/common/PWAUpdatePrompt";
+import { InstallPrompt } from "./components/common/InstallPrompt";
+
 const queryClient = new QueryClient();
 
 const AppRoutes = () => {
@@ -84,7 +90,7 @@ const AppRoutes = () => {
 
         {/* Shared Management Routes (Conditional Based on Role) */}
         <Route path="/projects" element={
-          user?.role === 'SuperAdmin' ? <Projects /> : <Dashboard /> // Projects is mostly admin
+          user?.role === 'SuperAdmin' ? <Projects /> : <Dashboard />
         } />
         <Route path="/sources" element={
           user?.role === 'SuperAdmin' ? <Sources /> : <SupervisorSources />
@@ -153,6 +159,7 @@ const AppRoutes = () => {
       </Route>
 
       {/* 404 */}
+      <Route path="/offline" element={<Offline />} />
       <Route path="*" element={<NotFound />} />
     </Routes>
   );
@@ -166,6 +173,11 @@ const App = () => (
           <Toaster />
           <Sonner />
           <BrowserRouter>
+            {/* PWA Components */}
+            <NetworkStatus />
+            <PWAUpdatePrompt />
+            <InstallPrompt />
+
             <AppRoutes />
           </BrowserRouter>
         </TooltipProvider>

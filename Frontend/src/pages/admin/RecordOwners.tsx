@@ -24,6 +24,7 @@ import { Edit, Trash2, Loader2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { formatError } from '@/lib/utils';
+import { API_BASE_URL } from '@/config';
 
 const RecordOwners: React.FC = () => {
   const { user } = useAuth();
@@ -46,7 +47,7 @@ const RecordOwners: React.FC = () => {
 
   const fetchUsers = async () => {
     try {
-      const response = await fetch('http://localhost:8000/admin/users', {
+      const response = await fetch(`${API_BASE_URL}/admin/users`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
       });
       if (response.ok) {
@@ -64,7 +65,7 @@ const RecordOwners: React.FC = () => {
 
   const fetchProjects = async () => {
     try {
-      const response = await fetch('http://localhost:8000/admin/projects', {
+      const response = await fetch(`${API_BASE_URL}/admin/projects`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
       });
       if (response.ok) {
@@ -76,7 +77,7 @@ const RecordOwners: React.FC = () => {
 
   const fetchSources = async () => {
     try {
-      const response = await fetch('http://localhost:8000/admin/sources', {
+      const response = await fetch(`${API_BASE_URL}/admin/sources`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
       });
       if (response.ok) {
@@ -88,7 +89,7 @@ const RecordOwners: React.FC = () => {
 
   const fetchLocations = async () => {
     try {
-      const response = await fetch('http://localhost:8000/admin/locations', {
+      const response = await fetch(`${API_BASE_URL}/admin/locations`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
       });
       if (response.ok) {
@@ -101,7 +102,7 @@ const RecordOwners: React.FC = () => {
   const fetchRecordOwners = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch('http://localhost:8000/admin/record-owners', {
+      const response = await fetch(`${API_BASE_URL}/admin/record-owners`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
       });
       if (response.ok) {
@@ -176,8 +177,8 @@ const RecordOwners: React.FC = () => {
 
     try {
       const url = editingOwner
-        ? `http://localhost:8000/admin/record-owners/${editingOwner.id}`
-        : 'http://localhost:8000/admin/record-owners';
+        ? `${API_BASE_URL}/admin/record-owners/${editingOwner.id}`
+        : `${API_BASE_URL}/admin/record-owners`;
       const method = editingOwner ? 'PUT' : 'POST';
       const body = editingOwner
         ? { record_owner_name: formData.name }
@@ -215,7 +216,7 @@ const RecordOwners: React.FC = () => {
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to delete this record owner?')) return;
     try {
-      const response = await fetch(`http://localhost:8000/admin/record-owners/${id}`, {
+      const response = await fetch(`${API_BASE_URL}/admin/record-owners/${id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
       });
@@ -236,11 +237,11 @@ const RecordOwners: React.FC = () => {
   const filteredLocations = locations.filter(l => l.sourceId === formData.sourceId);
 
   const columns = [
+    { key: 'projectName', header: 'Project', sortable: true },
+    { key: 'sourceName', header: 'Source', sortable: true },
+    { key: 'locationName', header: 'Location', sortable: true },
+    { key: 'name', header: 'Owner Name', sortable: true },
     { key: 'code', header: 'Code', sortable: true },
-    { key: 'name', header: 'Name', sortable: true },
-    { key: 'locationName', header: 'Location' },
-    { key: 'sourceName', header: 'Source' },
-    { key: 'projectName', header: 'Project' },
     {
       key: 'createdBy',
       header: 'Created By',
@@ -329,19 +330,9 @@ const RecordOwners: React.FC = () => {
                 </SelectContent>
               </Select>
             </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Code</Label>
-                <Input
-                  value={editingOwner ? formData.code : 'Auto-generated (e.g., R0001)'}
-                  disabled
-                  className="bg-muted"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Name</Label>
-                <Input value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="e.g., Department of Records" />
-              </div>
+            <div className="space-y-2">
+              <Label>Name</Label>
+              <Input value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="e.g., Department of Records" />
             </div>
           </div>
           <DialogFooter>

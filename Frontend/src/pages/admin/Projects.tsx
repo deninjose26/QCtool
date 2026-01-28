@@ -15,9 +15,17 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/contexts/AuthContext';
-import { Edit, Trash2, Loader2 } from 'lucide-react';
+import { Edit, Trash2, Loader2, Info } from 'lucide-react';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useToast } from '@/hooks/use-toast';
 import { formatError } from '@/lib/utils';
+import { API_BASE_URL } from '@/config';
 
 const Projects: React.FC = () => {
   const { user } = useAuth();
@@ -26,12 +34,12 @@ const Projects: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
-  const [formData, setFormData] = useState({ name: '', code: '' });
+  const [formData, setFormData] = useState({ name: '', code: '', description: '' });
   const { toast } = useToast();
 
   const fetchUsers = async () => {
     try {
-      const response = await fetch('http://localhost:8000/admin/users', {
+      const response = await fetch(`${API_BASE_URL}/admin/users`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
       });
       if (response.ok) {
@@ -50,7 +58,7 @@ const Projects: React.FC = () => {
   const fetchProjects = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch('http://localhost:8000/admin/projects', {
+      const response = await fetch(`${API_BASE_URL}/admin/projects`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('qc_token')}`
         }
@@ -61,6 +69,7 @@ const Projects: React.FC = () => {
           id: p.project_id,
           name: p.project_name,
           code: p.project_code,
+          description: p.description,
           status: 'active',
           createdBy: p.created_by,
           createdAt: p.created_date
@@ -82,13 +91,13 @@ const Projects: React.FC = () => {
 
   const handleCreate = () => {
     setEditingProject(null);
-    setFormData({ name: '', code: '' });
+    setFormData({ name: '', code: '', description: '' });
     setIsDialogOpen(true);
   };
 
   const handleEdit = (project: Project) => {
     setEditingProject(project);
-    setFormData({ name: project.name, code: project.code });
+    setFormData({ name: project.name, code: project.code, description: project.description || '' });
     setIsDialogOpen(true);
   };
 
@@ -100,14 +109,15 @@ const Projects: React.FC = () => {
 
     try {
       if (editingProject) {
-        const response = await fetch(`http://localhost:8000/admin/projects/${editingProject.id}`, {
+        const response = await fetch(`${API_BASE_URL}/admin/projects/${editingProject.id}`, {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${localStorage.getItem('qc_token')}`
           },
           body: JSON.stringify({
-            project_name: formData.name
+            project_name: formData.name,
+            description: formData.description
           })
         });
 
@@ -120,7 +130,7 @@ const Projects: React.FC = () => {
           toast({ title: 'Error', description: formatError(error.detail), variant: 'destructive' });
         }
       } else {
-        const response = await fetch('http://localhost:8000/admin/projects', {
+        const response = await fetch(`${API_BASE_URL}/admin/projects`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -128,6 +138,7 @@ const Projects: React.FC = () => {
           },
           body: JSON.stringify({
             project_name: formData.name.trim().toUpperCase(),
+            description: formData.description,
             created_by: user?.id
           })
         });
@@ -151,7 +162,7 @@ const Projects: React.FC = () => {
     if (!confirm('Are you sure you want to delete this project?')) return;
 
     try {
-      const response = await fetch(`http://localhost:8000/admin/projects/${id}`, {
+      const response = await fetch(`${API_BASE_URL}/admin/projects/${id}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('qc_token')}`
@@ -172,8 +183,30 @@ const Projects: React.FC = () => {
   };
 
   const columns = [
-    { key: 'code', header: 'Code', sortable: true },
     { key: 'name', header: 'Project Name', sortable: true },
+    {
+      key: 'description',
+      header: 'Description',
+      className: 'max-w-[300px]',
+      render: (value: string) => {
+        if (!value) return '-';
+        return (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="truncate cursor-help text-slate-500 italic max-w-[280px]">
+                  {value}
+                </div>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-[400px] break-words bg-slate-900 text-white border-none shadow-xl">
+                <p className="text-xs leading-relaxed">{value}</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        );
+      }
+    },
+    { key: 'code', header: 'Code', sortable: true },
     {
       key: 'status',
       header: 'Status',
@@ -207,14 +240,17 @@ const Projects: React.FC = () => {
         </div>
       )
     }
-  ];
+  ].filter(col => {
+    if (col.key === 'actions' && user?.role !== 'SuperAdmin') return false;
+    return true;
+  });
 
   return (
     <div className="space-y-6 animate-fade-in">
       <PageHeader
         title="Projects"
-        description="Manage digitization projects"
-        action={{ label: 'Add Project', onClick: handleCreate }}
+        description={user?.role === 'SuperAdmin' ? "Manage digitization projects" : "View digitization projects"}
+        action={user?.role === 'SuperAdmin' ? { label: 'Add Project', onClick: handleCreate } : undefined}
       />
 
       {isLoading ? (
@@ -241,21 +277,22 @@ const Projects: React.FC = () => {
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label htmlFor="code">Project Code</Label>
-              <Input
-                id="code"
-                value={editingProject ? formData.code : 'Auto-generated (e.g., P001)'}
-                disabled
-                className="bg-muted"
-              />
-            </div>
-            <div className="space-y-2">
               <Label htmlFor="name">Project Name</Label>
               <Input
                 id="name"
                 value={formData.name}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                 placeholder="e.g., National Archives Digitization"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="description">Description</Label>
+              <Textarea
+                id="description"
+                value={formData.description}
+                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                placeholder="Detailed description of the project mission, scope, and objectives..."
+                className="min-h-[100px] resize-none"
               />
             </div>
           </div>

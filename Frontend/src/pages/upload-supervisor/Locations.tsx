@@ -25,6 +25,7 @@ import { Edit, Trash2, Loader2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { formatError } from '@/lib/utils';
+import { API_BASE_URL } from '@/config';
 
 const Locations: React.FC = () => {
     const { user } = useAuth();
@@ -40,7 +41,7 @@ const Locations: React.FC = () => {
 
     const fetchUsers = async () => {
         try {
-            const response = await fetch('http://localhost:8000/admin/users', {
+            const response = await fetch(`${API_BASE_URL}/admin/users`, {
                 headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
             });
             if (response.ok) {
@@ -54,9 +55,9 @@ const Locations: React.FC = () => {
         try {
             setIsLoading(true);
             const [projectsRes, sourcesRes, locationsRes] = await Promise.all([
-                fetch('http://localhost:8000/admin/projects', { headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` } }),
-                fetch('http://localhost:8000/admin/sources', { headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` } }),
-                fetch('http://localhost:8000/admin/locations', { headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` } })
+                fetch(`${API_BASE_URL}/admin/projects`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` } }),
+                fetch(`${API_BASE_URL}/admin/sources`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` } }),
+                fetch(`${API_BASE_URL}/admin/locations`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` } })
             ]);
 
             if (projectsRes.ok && sourcesRes.ok && locationsRes.ok) {
@@ -122,7 +123,7 @@ const Locations: React.FC = () => {
 
         try {
             if (editingLocation) {
-                const response = await fetch(`http://localhost:8000/admin/locations/${editingLocation.id}`, {
+                const response = await fetch(`${API_BASE_URL}/admin/locations/${editingLocation.id}`, {
                     method: 'PUT',
                     headers: {
                         'Content-Type': 'application/json',
@@ -136,7 +137,7 @@ const Locations: React.FC = () => {
                     setIsDialogOpen(false);
                 }
             } else {
-                const response = await fetch('http://localhost:8000/upload-sup/locations', {
+                const response = await fetch(`${API_BASE_URL}/upload-sup/locations`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -166,7 +167,7 @@ const Locations: React.FC = () => {
     const handleDelete = async (id: string) => {
         if (!confirm('Are you sure you want to delete this location?')) return;
         try {
-            const response = await fetch(`http://localhost:8000/admin/locations/${id}`, {
+            const response = await fetch(`${API_BASE_URL}/admin/locations/${id}`, {
                 method: 'DELETE',
                 headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
             });
@@ -178,10 +179,10 @@ const Locations: React.FC = () => {
     };
 
     const columns = [
-        { key: 'code', header: 'Code', sortable: true },
-        { key: 'name', header: 'Location Name', sortable: true },
-        { key: 'sourceName', header: 'Source', sortable: true },
         { key: 'projectName', header: 'Project', sortable: true },
+        { key: 'sourceName', header: 'Source', sortable: true },
+        { key: 'name', header: 'Location Name', sortable: true },
+        { key: 'code', header: 'Code', sortable: true },
         {
             key: 'createdBy',
             header: 'Created By',

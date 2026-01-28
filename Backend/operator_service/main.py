@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Header
+from fastapi import APIRouter, Depends, HTTPException, status, Header, BackgroundTasks
 from sqlmodel import Session, select
 from uuid import UUID
 from pydantic import BaseModel
@@ -31,6 +31,11 @@ class BatchCreate(BaseModel):
     upload_type: str # complete, partial, re-upload
     total_images: int
     uploading_count: int
+
+class BatchUpdate(BaseModel):
+    book_name: Optional[str] = None
+    total_images: Optional[int] = None
+    uploading_count: Optional[int] = None
 
 class ProjectRead(BaseModel):
     project_id: UUID
@@ -476,11 +481,98 @@ def list_operator_batches(
             "completed_count": completed,        # Actual Uploaded
             "upload_type": upload_type,
             "is_reupload": batch.is_reupload,
+            "is_partial": batch.is_partial,
             "status": status,
             "created_date": batch.created_date,
             "upload_end_date": upload_rec.upload_end_date if upload_rec else None
         })
     return output
+
+@router.put("/batches/{batch_uid}")
+def update_batch(
+    batch_uid: UUID,
+    data: BatchUpdate,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Allows an operator to edit a batch before it starts uploading."""
+    if current_user.user_role != UserRole.Scanning_Operator:
+        raise HTTPException(status_code=403, detail="Only Operators can edit batches.")
+
+    batch = session.get(Batch, batch_uid)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    # 1. Verify ownership (allow editing if allocated or if they created it)
+    is_owner = False
+    allocation = session.get(ScanningOperatorAllocation, batch.scanning_operator_allocation_id)
+    if allocation and allocation.allocated_to_operator == current_user.user_id:
+        is_owner = True
+        
+    if not is_owner:
+        raise HTTPException(status_code=403, detail="You do not have permission to edit this batch.")
+
+    # 2. Check if batch is already uploading or uploaded
+    upload_rec = session.exec(select(Upload).where(Upload.batch_uid == batch_uid)).first()
+    if upload_rec and upload_rec.completed_count > 0:
+         raise HTTPException(
+            status_code=400, 
+            detail=f"Cannot edit batch that already has uploaded images. Use a new batch for changes."
+        )
+
+    # 3. Update fields
+    if data.book_name:
+        # Sanitize and validate
+        import re
+        book_name_upper = data.book_name.upper().strip()
+        if not re.match(r'^[A-Z0-9\s-]+$', book_name_upper):
+            raise HTTPException(status_code=400, detail="Invalid characters in book name.")
+        
+        record_name = session.get(RecordName, batch.record_name_id)
+        if record_name:
+            existing = session.exec(
+                select(RecordName)
+                .where(RecordName.record_name == book_name_upper)
+                .where(RecordName.project_id == record_name.project_id)
+                .where(RecordName.record_name_id != record_name.record_name_id)
+            ).first()
+            if existing:
+                batch.record_name_id = existing.record_name_id
+            else:
+                record_name.record_name = book_name_upper
+                session.add(record_name)
+
+    # 4. Handle Counts with Type Consistency
+    new_total = data.total_images if data.total_images is not None else batch.total_count
+    new_upload = data.uploading_count if data.uploading_count is not None else batch.upload_count
+    
+    if batch.is_complete:
+        # For complete, we use uploading_count as the master count for both total and upload
+        if data.uploading_count is not None:
+            batch.total_count = data.uploading_count
+            batch.upload_count = data.uploading_count
+        elif data.total_images is not None:
+            # Fallback if they only sent total
+            batch.total_count = data.total_images
+            batch.upload_count = data.total_images
+    else:
+        # For partial/rework, total must be GREATER than upload
+        batch.total_count = new_total
+        batch.upload_count = new_upload
+        
+        if batch.upload_count >= batch.total_count:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"For { 'Partial' if batch.is_partial else 'Rework' } batches, Total Images ({batch.total_count}) must be greater than Batch Target ({batch.upload_count})."
+            )
+
+    batch.last_updated = get_ist_now()
+    session.add(batch)
+    session.commit()
+    session.refresh(batch)
+    
+    return {"message": "Batch updated successfully", "batch_id": batch.batch_id}
+
 
 # --- Conversion Webhook (Called by DigitalOcean Function) ---
 from fastapi import Header
@@ -747,10 +839,51 @@ async def request_upload_url(
     except ClientError as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate pre-signed URL: {str(e)}")
 
+async def trigger_conversion_task(image_id: str, s3_path: str):
+    """Background task to trigger serverless conversion with state tracking."""
+    function_url = os.getenv('DO_FUNCTION_CONVERT_URL')
+    if not function_url or function_url == 'https://placeholder-will-update-later.com':
+        return
+
+    # 1. Mark as Converting in DB so we know it was at least triggered
+    from common.models import Image, ConversionStatus
+    from common.database import engine
+    
+    with Session(engine) as session:
+        img = session.get(Image, UUID(image_id))
+        if img:
+            img.conversion_status = ConversionStatus.Jpeg_Converting
+            session.add(img)
+            session.commit()
+
+    try:
+        # High timeout for serverless cold starts and processing
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                function_url,
+                json={
+                    "image_id": image_id,
+                    "original_path": s3_path,
+                    "original_bucket": os.getenv('S3_BUCKET_NAME'),
+                    "qc_bucket": os.getenv('QC_S3_BUCKET_NAME'),
+                    "api_secret": os.getenv('API_WEBHOOK_SECRET')
+                }
+            )
+            
+            if response.status_code == 200:
+                print(f"[INFO] Successfully triggered conversion for {image_id}")
+            else:
+                print(f"[ERROR] Serverless function returned {response.status_code} for {image_id}")
+                # If trigger failed, we might want to revert status or leave for recovery
+                
+    except Exception as e:
+        print(f"[ERROR] Background conversion trigger communication failed for {image_id}: {str(e)}")
+
 @router.post("/batches/{batch_uid}/upload-complete")
 async def upload_complete(
     batch_uid: UUID,
     request: UploadCompleteRequest,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
@@ -858,26 +991,8 @@ async def upload_complete(
     session.commit()
     session.refresh(new_image)
     
-    # Trigger conversion
-    conversion_triggered = False
-    function_url = os.getenv('DO_FUNCTION_CONVERT_URL')
-    
-    if function_url and function_url != 'https://placeholder-will-update-later.com':
-        try:
-            async with httpx.AsyncClient(timeout=2.0) as client:
-                await client.post(
-                    function_url,
-                    json={
-                        "image_id": str(new_image.image_id),
-                        "original_path": request.s3_path,
-                        "original_bucket": os.getenv('S3_BUCKET_NAME'),
-                        "qc_bucket": os.getenv('QC_S3_BUCKET_NAME'),
-                        "api_secret": os.getenv('API_WEBHOOK_SECRET')
-                    }
-                )
-                conversion_triggered = True
-        except Exception as e:
-            print(f"[WARNING] Failed to trigger conversion: {str(e)}")
+    # 7. Trigger conversion in background to avoid timeouts
+    background_tasks.add_task(trigger_conversion_task, str(new_image.image_id), request.s3_path)
     
     return {
         "success": True,
@@ -887,8 +1002,8 @@ async def upload_complete(
             "total": batch.upload_count,
             "percentage": round((upload_record.completed_count / batch.upload_count) * 100, 2)
         },
-        "conversion_triggered": conversion_triggered,
-        "message": "Image uploaded successfully (TIFF processed for conversion)"
+        "conversion_triggered": True, # We queued it
+        "message": "Image uploaded successfully (Conversion queued in background)"
     }
 
 @router.get("/batches/{batch_uid}/images")
@@ -914,15 +1029,50 @@ def get_batch_images(
         if not upload_rec or upload_rec.uploaded_by != current_user.user_id:
             raise HTTPException(status_code=403, detail="Not authorized to access these batch images")
     
-    # 3. Fetch images (Filter for only converted JPEGs)
-    images = session.exec(
-        select(Image)
-        .where(Image.batch_uid == batch_uid)
-        .where(Image.conversion_status == ConversionStatus.Jpeg_Converted)
-        .order_by(Image.image_name)
-    ).all()
+    # 3. Identify related batches for image fetching (Lineage Support)
+    from sqlmodel import or_, and_
+    parent_uid = None
+    if batch.is_reupload:
+        import re
+        # Find the R# suffix
+        match = re.search(r'R(\d+)$', batch.batch_id)
+        if match:
+            rework_num = int(match.group(1))
+            if rework_num > 1:
+                # If R2, parent is R1
+                parent_batch_id = re.sub(r'R\d+$', f'R{rework_num-1}', batch.batch_id)
+            else:
+                # If R1, parent is the base ID (e.g. C1)
+                parent_batch_id = re.sub(r'R\d+$', '', batch.batch_id)
+            
+            if parent_batch_id != batch.batch_id:
+                parent_batch = session.exec(select(Batch).where(Batch.batch_id == parent_batch_id)).first()
+                if parent_batch:
+                    parent_uid = parent_batch.batch_uid
+
+    # 4. Fetch images. For re-upload batches, we show:
+    # - Images already uploaded to the current rework batch
+    # - ONLY rejected images from the parent batch (to show what needs fixing)
+    if parent_uid:
+        statement = select(Image, QC).outerjoin(
+            QC, Image.image_id == QC.image_id
+        ).where(
+            or_(
+                Image.batch_uid == batch_uid,
+                and_(Image.batch_uid == parent_uid, QC.qc_status == QCStatus.Rejected)
+            )
+        ).where(Image.conversion_status == ConversionStatus.Jpeg_Converted)\
+         .order_by(Image.image_name)
+    else:
+        statement = select(Image, QC).outerjoin(
+            QC, Image.image_id == QC.image_id
+        ).where(Image.batch_uid == batch_uid)\
+         .where(Image.conversion_status == ConversionStatus.Jpeg_Converted)\
+         .order_by(Image.image_name)
+
+    results = session.exec(statement).all()
     
-    # 4. Generate presigned URLs
+    # 5. Generate presigned URLs
     s3_client = boto3.client(
         's3',
         endpoint_url=os.getenv('QC_ENDPOINT_URL') or os.getenv('ENDPOINT_URL'),
@@ -935,7 +1085,7 @@ def get_batch_images(
     output = []
     qc_bucket_name = os.getenv('QC_S3_BUCKET_NAME')
     
-    for img in images:
+    for img, qc_rec in results:
         # Use JPEG (QC Bucket) exclusively
         if not img.qc_s3_path:
             continue
@@ -957,7 +1107,7 @@ def get_batch_images(
             "image_name": img.image_name,
             "url": url,
             "is_converted": True,
-            "status": img.conversion_status
+            "status": qc_rec.qc_status if qc_rec else "Approved"
         })
         
     return output

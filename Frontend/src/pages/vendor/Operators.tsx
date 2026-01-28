@@ -20,6 +20,7 @@ import { Edit, Trash2, Loader2, Eye, EyeOff, UserCircle2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { formatError } from '@/lib/utils';
+import { API_BASE_URL } from '@/config';
 
 const Operators: React.FC = () => {
   const { user: currentUser } = useAuth();
@@ -43,7 +44,7 @@ const Operators: React.FC = () => {
     try {
       setIsLoading(true);
       const token = localStorage.getItem('qc_token');
-      const response = await fetch('http://localhost:8000/admin/users', {
+      const response = await fetch(`${API_BASE_URL}/admin/users`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (response.ok) {
@@ -113,7 +114,7 @@ const Operators: React.FC = () => {
         if (formData.password) {
           updateData.password = formData.password;
         }
-        response = await fetch(`http://localhost:8000/admin/users/${editingOperator.id}`, {
+        response = await fetch(`${API_BASE_URL}/admin/users/${editingOperator.id}`, {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
@@ -122,7 +123,7 @@ const Operators: React.FC = () => {
           body: JSON.stringify(updateData)
         });
       } else {
-        response = await fetch('http://localhost:8000/auth/register', {
+        response = await fetch(`${API_BASE_URL}/auth/register`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -156,7 +157,7 @@ const Operators: React.FC = () => {
     if (!confirm('Are you sure you want to delete this operator?')) return;
     try {
       const token = localStorage.getItem('qc_token');
-      const response = await fetch(`http://localhost:8000/admin/users/${id}`, {
+      const response = await fetch(`${API_BASE_URL}/admin/users/${id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       });

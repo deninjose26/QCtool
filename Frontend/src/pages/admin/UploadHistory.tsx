@@ -21,7 +21,8 @@ import {
     FileText,
     Filter,
     LayoutGrid,
-    ChevronDown
+    ChevronDown,
+    Zap
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { exportToExcel } from '@/utils/excelExport';
@@ -222,63 +223,126 @@ const AdminUploadHistory: React.FC = () => {
         setDateRange(undefined);
     };
 
-    const columns = [
-        {
-            key: 'batch_id',
-            header: 'Batch ID',
-            sortable: true,
-            render: (val: string, item: AdminBatch) => (
-                <div className="flex items-center gap-2">
-                    <ShieldCheck className="h-3 w-3 text-primary/50" />
-                    <code className={cn(
-                        "text-[10px] font-bold px-1.5 py-0.5 rounded shadow-sm",
-                        item.upload_type === 'Complete' ? "text-emerald-700 bg-emerald-50 border border-emerald-100/50" :
-                            item.upload_type === 'Partial' ? "text-blue-700 bg-blue-50 border border-blue-100/50" :
-                                "text-amber-700 bg-amber-50 border border-amber-100/50"
+    const [isTriggering, setIsTriggering] = useState<string | null>(null);
+
+    const handleTriggerBatch = async (batchUid: string, batchId: string) => {
+        try {
+            setIsTriggering(batchUid);
+            const res = await apiFetch(`${API_BASE_URL}/admin/maintenance/trigger-batch/${batchUid}`, {
+                method: 'POST'
+            });
+
+            if (!res.ok) throw new Error('Failed to trigger re-optimization');
+
+            const data = await res.json();
+            toast({
+                title: 'Optimization Triggered',
+                description: `Successfully queued ${batchId} for re-optimization.`,
+            });
+        } catch (err) {
+            console.error(err);
+            toast({
+                title: 'Trigger Failed',
+                description: err instanceof Error ? err.message : 'An error occurred',
+                variant: 'destructive'
+            });
+        } finally {
+            setIsTriggering(null);
+        }
+    };
+
+    const isRepairToolsEnabled = useMemo(() => {
+        return localStorage.getItem('admin_repair_tools_enabled') === 'true';
+    }, []);
+
+    const columns = useMemo(() => {
+        const baseColumns = [
+            {
+                key: 'batch_id',
+                header: 'Batch ID',
+                sortable: true,
+                render: (val: string, item: AdminBatch) => (
+                    <div className="flex items-center gap-2">
+                        <ShieldCheck className="h-3 w-3 text-primary/50" />
+                        <code className={cn(
+                            "text-[10px] font-bold px-1.5 py-0.5 rounded shadow-sm",
+                            item.upload_type === 'Complete' ? "text-emerald-700 bg-emerald-50 border border-emerald-100/50" :
+                                item.upload_type === 'Partial' ? "text-blue-700 bg-blue-50 border border-blue-100/50" :
+                                    "text-amber-700 bg-amber-50 border border-amber-100/50"
+                        )}>
+                            {val}
+                        </code>
+                    </div>
+                )
+            },
+            { key: 'project_name', header: 'Project', sortable: true },
+            { key: 'source_name', header: 'Source', sortable: true },
+            { key: 'location_name', header: 'Location', sortable: true },
+            { key: 'record_owner_name', header: 'Owner', sortable: true },
+            { key: 'record_type_name', header: 'Type', sortable: true },
+            { key: 'book_name', header: 'Book', sortable: true },
+            {
+                key: 'vendor_name',
+                header: 'Vendor',
+                sortable: true,
+                render: (val: string) => <span className="text-[10px] font-medium text-slate-600">{val}</span>
+            },
+            { key: 'operator_name', header: 'Operator', sortable: true },
+            {
+                key: 'upload_type',
+                header: 'Upload Type',
+                sortable: true,
+                render: (val: string) => (
+                    <Badge className={cn(
+                        "text-[10px] font-bold uppercase",
+                        val === 'Complete' ? "bg-emerald-100 text-emerald-700 border-emerald-200" :
+                            val === 'Partial' ? "bg-blue-100 text-blue-700 border-blue-200" :
+                                "bg-amber-100 text-amber-700 border-amber-200"
                     )}>
                         {val}
-                    </code>
-                </div>
-            )
-        },
-        { key: 'project_name', header: 'Project' },
-        { key: 'source_name', header: 'Source' },
-        {
-            key: 'vendor_name',
-            header: 'Vendor',
-            render: (val: string) => <span className="text-[10px] font-medium text-slate-600">{val}</span>
-        },
-        { key: 'operator_name', header: 'Operator' },
-        { key: 'location_name', header: 'Location' },
-        { key: 'record_owner_name', header: 'Owner' },
-        { key: 'record_type_name', header: 'Type' },
-        {
-            key: 'upload_type',
-            header: 'Type',
-            render: (val: string) => (
-                <Badge className={cn(
-                    "text-[10px] font-bold uppercase",
-                    val === 'Complete' ? "bg-emerald-100 text-emerald-700 border-emerald-200" :
-                        val === 'Partial' ? "bg-blue-100 text-blue-700 border-blue-200" :
-                            "bg-amber-100 text-amber-700 border-amber-200"
-                )}>
-                    {val}
-                </Badge>
-            )
-        },
-        { key: 'book_name', header: 'Book' },
-        {
-            key: 'completed_count',
-            header: 'Images',
-            render: (val: number) => <span className="text-sm font-semibold text-slate-700">{val}</span>
-        },
-        {
-            key: 'upload_end_date',
-            header: 'Completed At',
-            sortable: true,
-            render: (val: string) => val ? formatToLocalTime(val) : 'N/A'
+                    </Badge>
+                )
+            },
+            {
+                key: 'completed_count',
+                header: 'Images',
+                sortable: true,
+                render: (val: number) => <span className="text-sm font-semibold text-slate-700">{val}</span>
+            },
+            {
+                key: 'upload_end_date',
+                header: 'Completed At',
+                sortable: true,
+                render: (val: string) => val ? formatToLocalTime(val) : 'N/A'
+            }
+        ];
+
+        if (isRepairToolsEnabled) {
+            baseColumns.push({
+                key: 'actions',
+                header: 'Repair',
+                sortable: false,
+                render: (_: any, item: AdminBatch) => (
+                    <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleTriggerBatch(item.batch_uid, item.batch_id)}
+                        disabled={isTriggering === item.batch_uid}
+                        className="h-8 w-8 p-0 border-indigo-100 hover:bg-indigo-50 hover:text-indigo-600 transition-all"
+                        title="Repair Optimization (Re-convert)"
+                    >
+                        {isTriggering === item.batch_uid ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-500" />
+                        ) : (
+                            <Zap className="h-3.5 w-3.5" />
+                        )}
+                    </Button>
+                )
+            });
         }
-    ];
+
+        return baseColumns;
+    }, [isRepairToolsEnabled, isTriggering]);
 
     return (
         <div className="space-y-6 animate-fade-in pb-10">

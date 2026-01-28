@@ -21,6 +21,7 @@ import {
     MapPin,
     FileText,
     X,
+    Eye,
     Calendar as CalendarIcon
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
@@ -452,19 +453,35 @@ const ReuploadBatches: React.FC = () => {
             key: 'actions',
             header: 'Action',
             render: (_: any, item: OperatorBatch) => {
-                if (item.status === 'uploaded') {
-                    return <div className="flex items-center gap-1.5 text-emerald-600 font-bold text-xs uppercase"><CheckCircle className="h-4 w-4" /> Fixed</div>;
-                }
+                const isFixed = item.status === 'uploaded';
 
                 return (
-                    <Button
-                        size="sm"
-                        onClick={() => handleUploadClick(item)}
-                        className="h-8 gap-2 bg-amber-600 hover:bg-amber-700 shadow-sm"
-                    >
-                        <RefreshCw className={cn("h-4 w-4", isUploading && selectedBatch?.batch_uid === item.batch_uid && "animate-spin")} />
-                        {item.completed_count > 0 ? 'Continue' : 'Re-upload'}
-                    </Button>
+                    <div className="flex items-center gap-2">
+                        {isFixed ? (
+                            <div className="flex items-center gap-1.5 text-emerald-600 font-bold text-xs uppercase">
+                                <CheckCircle className="h-4 w-4" /> Fixed
+                            </div>
+                        ) : (
+                            <Button
+                                size="sm"
+                                onClick={() => handleUploadClick(item)}
+                                className="h-8 gap-2 bg-amber-600 hover:bg-amber-700 shadow-sm"
+                            >
+                                <RefreshCw className={cn("h-4 w-4", isUploading && selectedBatch?.batch_uid === item.batch_uid && "animate-spin")} />
+                                {item.completed_count > 0 ? 'Continue' : 'Re-upload'}
+                            </Button>
+                        )}
+
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => navigate(`/image-preview/${item.batch_uid}`)}
+                            className="h-8 w-8 p-0 border-slate-200 text-slate-500 hover:text-amber-600 hover:border-amber-200 transition-all shadow-sm"
+                            title="View Rejected Images"
+                        >
+                            <Eye className="h-4 w-4" />
+                        </Button>
+                    </div>
                 );
             }
         }

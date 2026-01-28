@@ -25,6 +25,7 @@ import { Edit, Trash2, Loader2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { formatError } from '@/lib/utils';
+import { API_BASE_URL } from '@/config';
 
 const Sources: React.FC = () => {
   const { user } = useAuth();
@@ -39,7 +40,7 @@ const Sources: React.FC = () => {
 
   const fetchUsers = async () => {
     try {
-      const response = await fetch('http://localhost:8000/admin/users', {
+      const response = await fetch(`${API_BASE_URL}/admin/users`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
       });
       if (response.ok) {
@@ -57,7 +58,7 @@ const Sources: React.FC = () => {
 
   const fetchProjects = async () => {
     try {
-      const response = await fetch('http://localhost:8000/admin/projects', {
+      const response = await fetch(`${API_BASE_URL}/admin/projects`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('qc_token')}`
         }
@@ -68,6 +69,7 @@ const Sources: React.FC = () => {
           id: p.project_id,
           name: p.project_name,
           code: p.project_code,
+          description: p.description,
           status: 'active',
           createdAt: p.created_date
         }));
@@ -81,7 +83,7 @@ const Sources: React.FC = () => {
   const fetchSources = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch('http://localhost:8000/admin/sources', {
+      const response = await fetch(`${API_BASE_URL}/admin/sources`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('qc_token')}`
         }
@@ -147,7 +149,7 @@ const Sources: React.FC = () => {
 
     try {
       if (editingSource) {
-        const response = await fetch(`http://localhost:8000/admin/sources/${editingSource.id}`, {
+        const response = await fetch(`${API_BASE_URL}/admin/sources/${editingSource.id}`, {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
@@ -167,7 +169,7 @@ const Sources: React.FC = () => {
           toast({ title: 'Error', description: formatError(error.detail), variant: 'destructive' });
         }
       } else {
-        const response = await fetch('http://localhost:8000/admin/sources', {
+        const response = await fetch(`${API_BASE_URL}/admin/sources`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -199,7 +201,7 @@ const Sources: React.FC = () => {
     if (!confirm('Are you sure you want to delete this source?')) return;
 
     try {
-      const response = await fetch(`http://localhost:8000/admin/sources/${id}`, {
+      const response = await fetch(`${API_BASE_URL}/admin/sources/${id}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('qc_token')}`
@@ -220,9 +222,9 @@ const Sources: React.FC = () => {
   };
 
   const columns = [
-    { key: 'code', header: 'Code', sortable: true },
-    { key: 'name', header: 'Source Name', sortable: true },
     { key: 'projectName', header: 'Project', sortable: true },
+    { key: 'name', header: 'Source Name', sortable: true },
+    { key: 'code', header: 'Code', sortable: true },
     {
       key: 'status',
       header: 'Status',
@@ -301,15 +303,6 @@ const Sources: React.FC = () => {
                   ))}
                 </SelectContent>
               </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="code">Source Code</Label>
-              <Input
-                id="code"
-                value={editingSource ? formData.code : 'Auto-generated (e.g., S001)'}
-                disabled
-                className="bg-muted"
-              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="name">Source Name</Label>

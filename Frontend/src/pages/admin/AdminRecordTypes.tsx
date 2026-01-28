@@ -24,6 +24,7 @@ import { Edit, Trash2, Loader2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { formatError } from '@/lib/utils';
+import { API_BASE_URL } from '@/config';
 
 const RecordTypes: React.FC = () => {
     const { user } = useAuth();
@@ -44,7 +45,7 @@ const RecordTypes: React.FC = () => {
 
     const fetchUsers = async () => {
         try {
-            const response = await fetch('http://localhost:8000/admin/users', {
+            const response = await fetch(`${API_BASE_URL}/admin/users`, {
                 headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
             });
             if (response.ok) {
@@ -62,7 +63,7 @@ const RecordTypes: React.FC = () => {
 
     const fetchData = async (endpoint: string, setter: Function) => {
         try {
-            const response = await fetch(`http://localhost:8000/admin/${endpoint}`, {
+            const response = await fetch(`${API_BASE_URL}/admin/${endpoint}`, {
                 headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
             });
             if (response.ok) {
@@ -75,7 +76,7 @@ const RecordTypes: React.FC = () => {
     const fetchRecordTypes = async (currentSources: Source[], currentProjects: Project[]) => {
         try {
             setIsLoading(true);
-            const response = await fetch('http://localhost:8000/admin/record-types', {
+            const response = await fetch(`${API_BASE_URL}/admin/record-types`, {
                 headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
             });
             if (response.ok) {
@@ -168,8 +169,8 @@ const RecordTypes: React.FC = () => {
 
         try {
             const url = editingType
-                ? `http://localhost:8000/admin/record-types/${editingType.id}`
-                : 'http://localhost:8000/admin/record-types';
+                ? `${API_BASE_URL}/admin/record-types/${editingType.id}`
+                : `${API_BASE_URL}/admin/record-types`;
             const method = editingType ? 'PUT' : 'POST';
             const body = editingType
                 ? { record_type_name: formData.name }
@@ -205,7 +206,7 @@ const RecordTypes: React.FC = () => {
     const handleDelete = async (id: string) => {
         if (!confirm('Are you sure you want to delete this record type?')) return;
         try {
-            const response = await fetch(`http://localhost:8000/admin/record-types/${id}`, {
+            const response = await fetch(`${API_BASE_URL}/admin/record-types/${id}`, {
                 method: 'DELETE',
                 headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
             });
@@ -219,10 +220,10 @@ const RecordTypes: React.FC = () => {
     const filteredSources = sources.filter(s => s.projectId === formData.projectId);
 
     const columns = [
-        { key: 'code', header: 'Code', sortable: true },
-        { key: 'name', header: 'Type Name', sortable: true },
-        { key: 'sourceName', header: 'Source', sortable: true },
         { key: 'projectName', header: 'Project', sortable: true },
+        { key: 'sourceName', header: 'Source', sortable: true },
+        { key: 'name', header: 'Type Name', sortable: true },
+        { key: 'code', header: 'Code', sortable: true },
         {
             key: 'createdBy',
             header: 'Created By',
@@ -311,23 +312,13 @@ const RecordTypes: React.FC = () => {
                                 </Select>
                             </div>
                         </div>
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                                <Label>Type Code</Label>
-                                <Input
-                                    value={editingType ? formData.code : 'Auto-generated (e.g., RT001)'}
-                                    disabled
-                                    className="bg-muted"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Type Name</Label>
-                                <Input
-                                    value={formData.name}
-                                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                                    placeholder="e.g., Bahi"
-                                />
-                            </div>
+                        <div className="space-y-2">
+                            <Label>Type Name</Label>
+                            <Input
+                                value={formData.name}
+                                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                                placeholder="e.g., Bahi"
+                            />
                         </div>
                     </div>
                     <DialogFooter>

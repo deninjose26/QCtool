@@ -20,8 +20,11 @@ import {
     Book,
     X,
     Maximize,
-    Minimize
+    Minimize,
+    AlertCircle
 } from 'lucide-react';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { API_BASE_URL } from '@/config';
 import { cn } from '@/lib/utils';
@@ -75,6 +78,7 @@ const VendorImagePreview: React.FC = () => {
     const [currentPage, setCurrentPage] = useState(1);
     const [searchQuery, setSearchQuery] = useState('');
     const [isBlurred, setIsBlurred] = useState(false);
+    const [showRejectedOnly, setShowRejectedOnly] = useState(false);
 
     // Filter Options States
     const [projects, setProjects] = useState<string[]>([]);
@@ -209,9 +213,11 @@ const VendorImagePreview: React.FC = () => {
     }, [bookFilter, currentIndex]);
 
     // Search and Filter Logic
-    const filteredImages = images.filter(img =>
-        img.image_name.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    const filteredImages = images.filter(img => {
+        const matchesSearch = img.image_name.toLowerCase().includes(searchQuery.toLowerCase());
+        const matchesRejected = showRejectedOnly ? img.status?.toLowerCase() === 'rejected' : true;
+        return matchesSearch && matchesRejected;
+    });
 
     // Security & Anti-Screenshot logic
     useEffect(() => {
@@ -524,12 +530,22 @@ const VendorImagePreview: React.FC = () => {
                                     }}
                                     onError={() => setImageLoadError(true)}
                                 />
-                                {/* Universal Brand Watermark */}
-                                <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10 overflow-hidden px-10">
-                                    <div className="text-[0.5rem] md:text-[2.5rem] font-black text-slate-900/[0.25] transform -rotate-12 select-none pointer-events-none uppercase tracking-tight whitespace-nowrap drop-shadow-sm text-center">
-                                        FamilyaConnect
+
+                                {/* Status Watermarks */}
+                                {currentImage.status?.toLowerCase() === 'rejected' && (
+                                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
+                                        <div className="text-lg md:text-4xl font-black text-rose-600/25 transform -rotate-12 select-none uppercase tracking-tighter shadow-sm">
+                                            REJECTED
+                                        </div>
                                     </div>
-                                </div>
+                                )}
+                                {currentImage.status?.toLowerCase() === 'approved' && (
+                                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
+                                        <div className="text-lg md:text-4xl font-black text-emerald-600/20 transform -rotate-12 select-none uppercase tracking-tighter shadow-sm">
+                                            ACCEPTED
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         ) : (
                             <div className="flex flex-col items-center gap-4 text-slate-300">
@@ -567,6 +583,17 @@ const VendorImagePreview: React.FC = () => {
                                     {filteredImages.length} FOUND
                                 </Badge>
                             </div>
+
+                            <div className="flex items-center space-x-2 bg-slate-50 p-2 rounded-lg border border-slate-100">
+                                <Checkbox
+                                    id="rejected-only"
+                                    checked={showRejectedOnly}
+                                    onCheckedChange={(v) => setShowRejectedOnly(!!v)}
+                                />
+                                <Label htmlFor="rejected-only" className="text-[10px] font-bold uppercase tracking-wider text-slate-500 cursor-pointer">
+                                    Show Rejected Only
+                                </Label>
+                            </div>
                             <div className="relative">
                                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                                 <input
@@ -593,7 +620,7 @@ const VendorImagePreview: React.FC = () => {
                                                     "min-h-[85px] rounded-xl border-2 transition-all flex flex-col items-center justify-center p-2 relative group/item",
                                                     isActive
                                                         ? "bg-primary text-white border-primary shadow-xl scale-105 z-10 ring-4 ring-primary/10"
-                                                        : "bg-background border-muted hover:border-primary/40 hover:bg-primary/5 hover:scale-105"
+                                                        : (img.status?.toLowerCase() === 'rejected' ? "bg-rose-50 border-rose-200" : "bg-background border-muted")
                                                 )}
                                             >
                                                 <span className={cn("text-[14px] font-black font-mono leading-none", isActive ? "text-white" : "text-muted-foreground group-hover/item:text-primary")}>
@@ -602,7 +629,15 @@ const VendorImagePreview: React.FC = () => {
                                                 <span className={cn("text-[8px] font-bold break-all w-full text-center mt-1.5 leading-tight opacity-70", isActive ? "text-white/90" : "text-muted-foreground/80")}>
                                                     {img.image_name}
                                                 </span>
-                                                <div className={cn("absolute bottom-0 left-0 right-0 h-1.5 rounded-b-[10px]", isActive ? "bg-white/40" : "bg-green-500/20")} />
+                                                <div className={cn(
+                                                    "absolute bottom-0 left-0 right-0 h-1.5 rounded-b-[10px]",
+                                                    isActive ? "bg-white/40" : (img.status?.toLowerCase() === 'rejected' ? "bg-rose-500" : "bg-green-500/20")
+                                                )} />
+                                                {img.status?.toLowerCase() === 'rejected' && (
+                                                    <div className="absolute top-1 right-1">
+                                                        <AlertCircle className={cn("h-3 w-3", isActive ? "text-white" : "text-rose-500")} />
+                                                    </div>
+                                                )}
                                             </button>
                                         );
                                     })}

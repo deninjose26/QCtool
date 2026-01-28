@@ -28,15 +28,25 @@ export interface QueuedBatch {
     is_reupload: boolean;
 }
 
+export interface SyncAction {
+    id: string;
+    action: 'create' | 'update' | 'delete';
+    endpoint: string;
+    data: any;
+    timestamp: number;
+}
+
 class UploadDatabase extends Dexie {
     upload_queue!: Table<QueuedFile, number>;
     batch_queue!: Table<QueuedBatch, string>;
+    sync_queue!: Table<SyncAction, string>;
 
     constructor() {
         super('QCToolUploads');
-        this.version(2).stores({
+        this.version(3).stores({
             upload_queue: '++id, batch_uid, status, file_name',
-            batch_queue: 'batch_uid, status, queued_at'
+            batch_queue: 'batch_uid, status, queued_at',
+            sync_queue: 'id, action, timestamp'
         });
     }
 }

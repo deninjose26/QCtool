@@ -13,10 +13,12 @@ import {
   Zap,
   Lock,
   BarChart3,
+  Download,
 } from 'lucide-react';
 import networkBg from '@/assets/network-bg.png';
 import logo from '@/assets/logo.png';
 import ctaBg from '@/assets/cta-bg.png';
+import LandingInstallButton from '@/components/common/LandingInstallButton';
 
 const Landing: React.FC = () => {
   const features = [
@@ -70,6 +72,7 @@ const Landing: React.FC = () => {
             <img src={logo} alt="QC Portal Logo" className="h-14 w-auto object-contain" />
           </div>
           <div className="flex items-center gap-4">
+            <LandingInstallButton className="hidden md:flex" />
             <Link to="/login">
               <Button variant="ghost">Login</Button>
             </Link>

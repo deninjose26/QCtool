@@ -48,6 +48,7 @@ class QCImageDetail(BaseModel):
     qc_status: QCStatus
     orientation_error: bool
     remarks: Optional[str]
+    conversion_status: str
 
 class QCDecisionRequest(BaseModel):
     qc_status: QCStatus
@@ -341,7 +342,8 @@ def get_batch_images(
             "original_s3_path": original_url,
             "qc_status": qc.qc_status,
             "orientation_error": qc.orientation_error,
-            "remarks": qc.remarks
+            "remarks": qc.remarks,
+            "conversion_status": img.conversion_status
         })
     
     return {

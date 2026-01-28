@@ -80,26 +80,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const refreshProfile = useCallback(async () => {
     if (!user) return;
 
-    // 1. Fetch Profile Picture if we have a path (or check if we have one)
     try {
-      const res = await apiFetch(`${API_BASE_URL}/auth/profile/me/picture`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.url) {
-          updateUser({ avatar: data.url });
+      // 1. Fetch full user object to sync name/email/etc
+      const userRes = await apiFetch(`${API_BASE_URL}/auth/me`);
+      if (userRes.ok) {
+        const userData = await userRes.json();
+        const updatedUser: User = {
+          ...user,
+          name: userData.name || userData.username,
+          username: userData.username,
+          email: userData.email,
+          role: userData.user_role as UserRole
+        };
+        setUser(updatedUser);
+        localStorage.setItem('qc_user', JSON.stringify(updatedUser));
+      }
+
+      // 2. Fetch Profile Picture
+      const picRes = await apiFetch(`${API_BASE_URL}/auth/profile/me/picture`);
+      if (picRes.ok) {
+        const picData = await picRes.ok ? await picRes.json() : null;
+        if (picData?.url) {
+          updateUser({ avatar: picData.url });
         }
       }
     } catch (e) {
-      console.error("Failed to refresh profile picture", e);
+      console.error("Failed to refresh profile info", e);
     }
   }, [user, apiFetch, updateUser]);
 
-  // Initial load refresh
+  // Sync profile details on mount
   useEffect(() => {
-    if (user && !user.avatar) {
+    if (user) {
       refreshProfile();
     }
-  }, [user?.id]); // Only retry on ID change or initial mount if missing
+  }, [user?.id]); // Runs on initial load and if user changes
 
   const login = useCallback(async (username: string, password: string): Promise<boolean> => {
     try {
@@ -117,7 +132,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         const loggedInUser: User = {
           id: data.user_id,
-          name: data.username,
+          name: data.name || data.username,
           username: data.username,
           email: '',
           role: data.role as UserRole,

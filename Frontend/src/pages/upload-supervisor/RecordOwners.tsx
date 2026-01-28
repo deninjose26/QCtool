@@ -23,6 +23,7 @@ import { Edit, Trash2, Loader2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { formatError } from '@/lib/utils';
+import { API_BASE_URL } from '@/config';
 
 const RecordOwners: React.FC = () => {
     const { user } = useAuth();
@@ -39,7 +40,7 @@ const RecordOwners: React.FC = () => {
 
     const fetchUsers = async () => {
         try {
-            const response = await fetch('http://localhost:8000/admin/users', { headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` } });
+            const response = await fetch(`${API_BASE_URL}/admin/users`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` } });
             if (response.ok) {
                 const data = await response.json();
                 setUsers(data.map((u: any) => ({ id: u.user_id, name: u.name, username: u.username, email: u.email, role: u.user_role })));
@@ -51,10 +52,10 @@ const RecordOwners: React.FC = () => {
         try {
             setIsLoading(true);
             const [projectsRes, sourcesRes, locationsRes, ownersRes] = await Promise.all([
-                fetch('http://localhost:8000/admin/projects', { headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` } }),
-                fetch('http://localhost:8000/admin/sources', { headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` } }),
-                fetch('http://localhost:8000/admin/locations', { headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` } }),
-                fetch('http://localhost:8000/admin/record-owners', { headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` } })
+                fetch(`${API_BASE_URL}/admin/projects`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` } }),
+                fetch(`${API_BASE_URL}/admin/sources`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` } }),
+                fetch(`${API_BASE_URL}/admin/locations`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` } }),
+                fetch(`${API_BASE_URL}/admin/record-owners`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` } })
             ]);
 
             if (projectsRes.status === 200 && sourcesRes.status === 200 && locationsRes.status === 200 && ownersRes.status === 200) {
@@ -122,7 +123,7 @@ const RecordOwners: React.FC = () => {
 
         try {
             if (editingOwner) {
-                const response = await fetch(`http://localhost:8000/admin/record-owners/${editingOwner.id}`, {
+                const response = await fetch(`${API_BASE_URL}/admin/record-owners/${editingOwner.id}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` },
                     body: JSON.stringify({ record_owner_name: formData.name })
@@ -133,7 +134,7 @@ const RecordOwners: React.FC = () => {
                     setIsDialogOpen(false);
                 }
             } else {
-                const response = await fetch('http://localhost:8000/upload-sup/record-owners', {
+                const response = await fetch(`${API_BASE_URL}/upload-sup/record-owners`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` },
                     body: JSON.stringify({
@@ -159,7 +160,7 @@ const RecordOwners: React.FC = () => {
     const handleDelete = async (id: string) => {
         if (!confirm('Are you sure?')) return;
         try {
-            const response = await fetch(`http://localhost:8000/admin/record-owners/${id}`, {
+            const response = await fetch(`${API_BASE_URL}/admin/record-owners/${id}`, {
                 method: 'DELETE',
                 headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
             });
@@ -168,11 +169,11 @@ const RecordOwners: React.FC = () => {
     };
 
     const columns = [
-        { key: 'code', header: 'Code', sortable: true },
-        { key: 'name', header: 'Owner Name', sortable: true },
-        { key: 'locationName', header: 'Location', sortable: true },
-        { key: 'sourceName', header: 'Source', sortable: true },
         { key: 'projectName', header: 'Project', sortable: true },
+        { key: 'sourceName', header: 'Source', sortable: true },
+        { key: 'locationName', header: 'Location', sortable: true },
+        { key: 'name', header: 'Owner Name', sortable: true },
+        { key: 'code', header: 'Code', sortable: true },
         {
             key: 'createdBy',
             header: 'Created By',

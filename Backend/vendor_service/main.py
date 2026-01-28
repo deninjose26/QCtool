@@ -427,13 +427,48 @@ def get_vendor_batch_images(
     from botocore.client import Config
     import os
     
-    # Fetch converted images from database
-    images = session.exec(
-        select(Image)
-        .where(Image.batch_uid == batch_uid)
-        .where(Image.conversion_status == ConversionStatus.Jpeg_Converted)
-        .order_by(Image.image_name)
-    ).all()
+    # Identiy related batches for image fetching (Lineage Support)
+    from sqlmodel import or_, and_
+    parent_uid = None
+    if batch.is_reupload:
+        import re
+        # Find the R# suffix
+        match = re.search(r'R(\d+)$', batch.batch_id)
+        if match:
+            rework_num = int(match.group(1))
+            if rework_num > 1:
+                # If R2, parent is R1
+                parent_batch_id = re.sub(r'R\d+$', f'R{rework_num-1}', batch.batch_id)
+            else:
+                # If R1, parent is the base ID (e.g. C1)
+                parent_batch_id = re.sub(r'R\d+$', '', batch.batch_id)
+            
+            if parent_batch_id != batch.batch_id:
+                parent_batch = session.exec(select(Batch).where(Batch.batch_id == parent_batch_id)).first()
+                if parent_batch:
+                    parent_uid = parent_batch.batch_uid
+
+    # Fetch images. For re-upload batches, we show:
+    # - Images already uploaded to the current rework batch
+    # - ONLY rejected images from the parent batch (to show what needs fixing)
+    if parent_uid:
+        statement = select(Image, QC).outerjoin(
+            QC, Image.image_id == QC.image_id
+        ).where(
+            or_(
+                Image.batch_uid == batch_uid,
+                and_(Image.batch_uid == parent_uid, QC.qc_status == QCStatus.Rejected)
+            )
+        ).where(Image.conversion_status == ConversionStatus.Jpeg_Converted)\
+         .order_by(Image.image_name)
+    else:
+        statement = select(Image, QC).outerjoin(
+            QC, Image.image_id == QC.image_id
+        ).where(Image.batch_uid == batch_uid)\
+         .where(Image.conversion_status == ConversionStatus.Jpeg_Converted)\
+         .order_by(Image.image_name)
+
+    results = session.exec(statement).all()
     
     # Generate presigned URLs
     s3_client = boto3.client(
@@ -448,7 +483,7 @@ def get_vendor_batch_images(
     output = []
     qc_bucket_name = os.getenv('QC_S3_BUCKET_NAME')
     
-    for img in images:
+    for img, qc_rec in results:
         # Use JPEG (QC Bucket) exclusively
         if not img.qc_s3_path:
             continue
@@ -470,7 +505,7 @@ def get_vendor_batch_images(
             "image_name": img.image_name,
             "url": url,
             "is_converted": True,
-            "status": img.conversion_status
+            "status": qc_rec.qc_status if qc_rec else "Approved"
         })
         
     return output
@@ -766,31 +801,72 @@ def get_vendor_dashboard_stats(
     batches_results = session.exec(batches_stmt).all()
     
     total_batches = len(batches_results)
-    target_images = sum(b.total_count for b, u in batches_results)
-    uploaded_images = sum(u.completed_count for b, u in batches_results if u)
-    completed_batches = len([u for b, u in batches_results if u and u.upload_status == 'Completed'])
     
-    # Rework Needed
-    rework_batches = len([b for b, u in batches_results if b.is_reupload and not b.vendor_approved])
-
-    # 3. QC Insights
-    all_qca_stmt = (
-        select(QCAllocation)
+    # Target images come ONLY from initial allocations (ignores inflation from rework batches)
+    target_images = sum(b.total_count for b, u in batches_results if not b.is_reupload)
+    
+    # Total images that have been physically uploaded across everything
+    gross_uploaded = sum(u.completed_count for b, u in batches_results if u)
+    
+    # Net Uploaded = Gross - (Rejected images that haven't been replaced yet)
+    # Actually, for the Progress Bar, the most accurate is to show (Gross - Rejected)
+    # This shows Exactly how many 'Good or Pending' images are in the pipe.
+    total_rejected_stmt = (
+        select(func.count(QC.qc_id))
+        .join(QCAllocation, QC.qc_allocation_id == QCAllocation.qc_allocation_id)
+        .join(Batch, QCAllocation.batch_uid == Batch.batch_uid)
+        .join(ScanningOperatorAllocation, Batch.scanning_operator_allocation_id == ScanningOperatorAllocation.scanning_operator_allocation_id)
+        .join(VendorAllocation, ScanningOperatorAllocation.vendor_allocation_id == VendorAllocation.vendor_allocation_id)
+        .where(VendorAllocation.allocated_to_vendor == current_user.user_id)
+        .where(QC.qc_status == QCStatus.Rejected)
+    )
+    current_rejected_count = session.exec(total_rejected_stmt).one()
+    
+    # We subtract active rejections from the gross because re-uploads for these rejections 
+    # will add back to the gross count eventually.
+    uploaded_images = max(0, gross_uploaded - current_rejected_count)
+    
+    # Optimization: Ensure Progress Bar doesn't exceed 100% if Target was slightly off
+    if target_images > 0:
+        uploaded_images = min(uploaded_images, target_images)
+    
+    # Batches that have been physically uploaded
+    uploaded_batches = len([u for b, u in batches_results if u and u.upload_status == 'Completed'])
+    
+    # Batches that have passed QC Verification (Finalized)
+    verified_batches_stmt = (
+        select(func.count(QCAllocation.qc_allocation_id))
         .join(Batch, QCAllocation.batch_uid == Batch.batch_uid)
         .join(ScanningOperatorAllocation, Batch.scanning_operator_allocation_id == ScanningOperatorAllocation.scanning_operator_allocation_id)
         .join(VendorAllocation, ScanningOperatorAllocation.vendor_allocation_id == VendorAllocation.vendor_allocation_id)
         .where(VendorAllocation.allocated_to_vendor == current_user.user_id)
         .where(QCAllocation.qc_batch_status.in_([QCBatchStatus.Verified, QCBatchStatus.Verified_With_Rejection]))
     )
-    all_qca = session.exec(all_qca_stmt).all()
+    verified_batches = session.exec(verified_batches_stmt).one()
     
-    total_accepted = 0
-    total_rejected = 0
-    for qca in all_qca:
-        accepted = session.exec(select(func.count(QC.qc_id)).where(QC.qc_allocation_id == qca.qc_allocation_id).where(QC.qc_status == QCStatus.Approved)).one()
-        rejected = session.exec(select(func.count(QC.qc_id)).where(QC.qc_allocation_id == qca.qc_allocation_id).where(QC.qc_status == QCStatus.Rejected)).one()
-        total_accepted += accepted
-        total_rejected += rejected
+    # Rework Needed
+    rework_batches = len([b for b, u in batches_results if b.is_reupload and not b.vendor_approved])
+
+    # 3. QC Insights
+    # Get all QC records across all allocations for this vendor's batches
+    qc_summary_stmt = (
+        select(QC.qc_status, func.count(QC.qc_id))
+        .join(QCAllocation, QC.qc_allocation_id == QCAllocation.qc_allocation_id)
+        .join(Batch, QCAllocation.batch_uid == Batch.batch_uid)
+        .join(ScanningOperatorAllocation, Batch.scanning_operator_allocation_id == ScanningOperatorAllocation.scanning_operator_allocation_id)
+        .join(VendorAllocation, ScanningOperatorAllocation.vendor_allocation_id == VendorAllocation.vendor_allocation_id)
+        .where(VendorAllocation.allocated_to_vendor == current_user.user_id)
+        .group_by(QC.qc_status)
+    )
+    qc_summary_results = session.exec(qc_summary_stmt).all()
+    
+    qc_counts_map = {status: count for status, count in qc_summary_results}
+    total_accepted = qc_counts_map.get(QCStatus.Approved, 0)
+    total_rejected = qc_counts_map.get(QCStatus.Rejected, 0)
+    
+    # Pending QC = Uploaded - (Accepted + Rejected)
+    # This includes images in batches not yet allocated, and images in allocated batches with status 'Pending'
+    total_qc_pending = max(0, uploaded_images - (total_accepted + total_rejected))
 
     # 4. Recent Activity
     recent_batches = list_vendor_batches(session, current_user)[:5]
@@ -799,7 +875,8 @@ def get_vendor_dashboard_stats(
         "counts": counts,
         "performance": {
             "total_batches": total_batches,
-            "completed_batches": completed_batches,
+            "uploaded_batches": uploaded_batches,
+            "verified_batches": verified_batches,
             "target_images": target_images,
             "uploaded_images": uploaded_images,
             "rework_needed": rework_batches
@@ -807,6 +884,7 @@ def get_vendor_dashboard_stats(
         "qc_stats": {
             "total_accepted": total_accepted,
             "total_rejected": total_rejected,
+            "total_qc_pending": total_qc_pending,
             "accuracy": round((total_accepted / (total_accepted + total_rejected) * 100), 2) if (total_accepted + total_rejected) > 0 else 100
         },
         "recent_batches": recent_batches

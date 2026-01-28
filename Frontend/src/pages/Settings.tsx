@@ -6,10 +6,13 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Switch } from '@/components/ui/switch';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { Sun, Moon, Monitor, Laptop, Info, Mail, Bell } from 'lucide-react';
+import { Sun, Moon, Monitor, Laptop, Info, Mail, Bell, Wrench, RefreshCw, Loader2, AlertTriangle, ShieldAlert } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import { API_BASE_URL } from '@/config';
+import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 
 const Settings: React.FC = () => {
     const { theme, setTheme } = useTheme();
@@ -21,6 +24,19 @@ const Settings: React.FC = () => {
         return saved === 'true';
     });
     const [isLoading, setIsLoading] = useState(true);
+    const [repairToolsEnabled, setRepairToolsEnabled] = useState(() => {
+        const saved = localStorage.getItem('admin_repair_tools_enabled');
+        return saved === 'true';
+    });
+
+    const handleToggleRepairTools = (enabled: boolean) => {
+        setRepairToolsEnabled(enabled);
+        localStorage.setItem('admin_repair_tools_enabled', String(enabled));
+        toast({
+            title: 'Repair Tools Updated',
+            description: `Batch repair actions are now ${enabled ? 'visible' : 'hidden'} in Upload History`,
+        });
+    };
 
     const themes = [
         { id: 'light', name: 'Light Mode', icon: Sun, desc: 'Clean and bright appearance', color: 'bg-white' },
@@ -240,25 +256,66 @@ const Settings: React.FC = () => {
                     </Card>
                 )}
 
-                {/* Coming Soon Section */}
-                <Card className="border-none shadow-md shadow-slate-200/50 ring-1 ring-slate-200/60 bg-white overflow-hidden relative">
-                    <div className="absolute top-0 right-0 p-8 opacity-5">
-                        <Info className="h-24 w-24 text-indigo-300" />
-                    </div>
-                    <CardContent className="p-10 flex flex-col items-center text-center space-y-4">
-                        <div className="h-16 w-16 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-500 mb-2">
-                            <Laptop className="h-8 w-8" />
-                        </div>
-                        <h3 className="text-lg font-black text-slate-900 tracking-tight uppercase">More Settings Coming Soon</h3>
-                        <p className="text-sm text-slate-500 max-w-md font-medium leading-relaxed italic">
-                            "Further settings will be available on next updates."
-                        </p>
-                        <div className="flex items-center gap-2 mt-4 px-4 py-1.5 bg-slate-100 rounded-full text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                            <span className="h-1.5 w-1.5 rounded-full bg-indigo-400 animate-pulse" />
-                            Update in Progress
-                        </div>
-                    </CardContent>
-                </Card>
+                {/* Admin Troubleshooting - Controlled Visibility */}
+                {user?.role === 'SuperAdmin' && (
+                    <Card className="border-none shadow-md shadow-slate-200/50 ring-1 ring-slate-200/60 overflow-hidden bg-white">
+                        <CardHeader className="pb-4">
+                            <div className="flex items-center gap-3">
+                                <div className="h-10 w-10 rounded-xl bg-amber-50 flex items-center justify-center">
+                                    <Wrench className="h-5 w-5 text-amber-600" />
+                                </div>
+                                <div>
+                                    <div className="flex items-center gap-2">
+                                        <CardTitle className="text-sm font-black uppercase tracking-widest text-slate-800">Troubleshooting Tools</CardTitle>
+                                        <Badge className="bg-amber-100 text-amber-700 border-amber-200 font-bold px-1.5 h-4 text-[8px] uppercase tracking-tighter">Diagnostic</Badge>
+                                    </div>
+                                    <CardDescription className="text-xs font-medium text-slate-400">Manage manual recovery and repair features</CardDescription>
+                                </div>
+                            </div>
+                        </CardHeader>
+                        <CardContent className="p-6 space-y-6">
+                            <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-100">
+                                <div className="flex items-center gap-3">
+                                    <div className="h-12 w-12 rounded-lg bg-white border border-slate-200 flex items-center justify-center">
+                                        <RefreshCw className={cn(
+                                            "h-6 w-6 transition-colors",
+                                            repairToolsEnabled ? "text-amber-500" : "text-slate-300"
+                                        )} />
+                                    </div>
+                                    <div className="flex-1">
+                                        <Label className="text-sm font-bold text-slate-900 cursor-pointer">
+                                            Enable Batch Repair Options
+                                        </Label>
+                                        <p className="text-xs text-slate-500 font-medium mt-0.5 max-w-md">
+                                            When enabled, a "Repair" column will appear in the Master Upload History to re-trigger image optimization for specific batches.
+                                        </p>
+                                    </div>
+                                </div>
+                                <Switch
+                                    checked={repairToolsEnabled}
+                                    onCheckedChange={handleToggleRepairTools}
+                                    className="data-[state=checked]:bg-amber-500"
+                                />
+                            </div>
+
+                            <Alert className="bg-blue-50/50 border-blue-100">
+                                <Info className="h-4 w-4 text-blue-500" />
+                                <AlertTitle className="text-[10px] font-bold uppercase text-blue-800 tracking-wider">Optimization Note</AlertTitle>
+                                <AlertDescription className="text-xs text-blue-600 font-medium leading-relaxed">
+                                    Keeping these tools hidden prevents accidental re-triggers during active production hours. Enable them only when diagnostic work is required.
+                                </AlertDescription>
+                            </Alert>
+                        </CardContent>
+                    </Card>
+                )}
+
+                {/* Info Card */}
+                <div className="p-6 bg-slate-900 rounded-2xl text-center relative overflow-hidden group">
+                    <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                    <p className="text-xs text-slate-400 font-medium italic relative z-10">
+                        "Your settings are automatically synchronized across all your devices."
+                    </p>
+                </div>
             </div>
         </div>
     );

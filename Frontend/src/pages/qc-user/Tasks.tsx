@@ -29,6 +29,8 @@ import {
 import { exportToExcel } from '@/utils/excelExport';
 import { API_BASE_URL } from '@/config';
 import { useToast } from '@/hooks/use-toast';
+import { useNetworkStatus } from '@/hooks/useNetworkStatus';
+import { syncManager } from '@/utils/syncManager';
 import { formatToLocalTime } from '@/utils/dateUtils';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -86,17 +88,36 @@ const QCTasks: React.FC = () => {
   const { toast } = useToast();
   const token = localStorage.getItem('qc_token');
   const navigate = useNavigate();
+  const { isOnline } = useNetworkStatus();
 
   const handleCompleteTask = async (allocationId: string) => {
-    try {
-      const res = await fetch(`${API_BASE_URL}/qc/complete-task/${allocationId}`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (!res.ok) throw new Error('Failed to complete task');
+    const endpoint = `${API_BASE_URL}/qc/complete-task/${allocationId}`;
 
-      toast({ title: 'Success', description: 'Batch marked as completed' });
-      navigate('/qc-history');
+    try {
+      if (!isOnline) {
+        // Save to offline sync queue
+        await syncManager.addToQueue('create', endpoint, {});
+
+        toast({
+          title: 'Success (Offline)',
+          description: 'Batch will be marked as completed once you\'re back online.'
+        });
+
+        // Optimistically remove from list
+        setTasks(prev => prev.filter(t => t.qc_allocation_id !== allocationId));
+        setFilteredTasks(prev => prev.filter(t => t.qc_allocation_id !== allocationId));
+
+        navigate('/qc-history');
+      } else {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!res.ok) throw new Error('Failed to complete task');
+
+        toast({ title: 'Success', description: 'Batch marked as completed' });
+        navigate('/qc-history');
+      }
     } catch (error) {
       console.error(error);
       toast({ title: 'Error', description: 'Could not complete task', variant: 'destructive' });

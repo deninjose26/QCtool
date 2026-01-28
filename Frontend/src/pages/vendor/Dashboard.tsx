@@ -31,7 +31,8 @@ interface VendorStats {
     };
     performance: {
         total_batches: number;
-        completed_batches: number;
+        uploaded_batches: number;
+        verified_batches: number;
         target_images: number;
         uploaded_images: number;
         rework_needed: number;
@@ -39,6 +40,7 @@ interface VendorStats {
     qc_stats: {
         total_accepted: number;
         total_rejected: number;
+        total_qc_pending: number;
         accuracy: number;
     };
     recent_batches: Array<any>;
@@ -144,22 +146,41 @@ const VendorDashboard: React.FC = () => {
                                 </div>
                             </div>
                         </div>
-                        <div className="p-4 space-y-3">
+                        <div className="p-4 space-y-4">
+                            {/* Upload Progress */}
                             <div>
-                                <div className="flex justify-between text-[11px] font-bold mb-2">
-                                    <span className="text-slate-500">Image Goal Completion</span>
-                                    <span className="text-emerald-600">{Math.round((stats.performance.uploaded_images / (stats.performance.target_images || 1)) * 100)}%</span>
+                                <div className="flex justify-between text-[10px] font-black uppercase mb-1.5">
+                                    <span className="text-slate-500">Physical Uploads</span>
+                                    <span className="text-emerald-600 font-black">{Math.round((stats.performance.uploaded_images / (stats.performance.target_images || 1)) * 100)}%</span>
                                 </div>
-                                <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                                <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
                                     <div
                                         className="bg-emerald-500 h-full transition-all duration-1000"
                                         style={{ width: `${(stats.performance.uploaded_images / (stats.performance.target_images || 1)) * 100}%` }}
                                     />
                                 </div>
+                                <div className="flex items-center justify-between text-[9px] font-bold text-slate-400 mt-1 uppercase">
+                                    <span>{stats.performance.uploaded_images.toLocaleString()} Images</span>
+                                    <span>Target: {stats.performance.target_images.toLocaleString()}</span>
+                                </div>
                             </div>
-                            <div className="flex items-center justify-between text-[10px] font-black text-slate-400">
-                                <span>{stats.performance.uploaded_images.toLocaleString()} UPLOADED</span>
-                                <span>{stats.performance.target_images.toLocaleString()} TARGET</span>
+
+                            {/* QC Progress */}
+                            <div>
+                                <div className="flex justify-between text-[10px] font-black uppercase mb-1.5">
+                                    <span className="text-slate-500">QC Finalization</span>
+                                    <span className="text-blue-600 font-black">{Math.round(((stats.qc_stats.total_accepted + stats.qc_stats.total_rejected) / (stats.performance.target_images || 1)) * 100)}%</span>
+                                </div>
+                                <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                                    <div
+                                        className="bg-blue-500 h-full transition-all duration-1000 shadow-[0_0_8px_rgba(59,130,246,0.3)]"
+                                        style={{ width: `${((stats.qc_stats.total_accepted + stats.qc_stats.total_rejected) / (stats.performance.target_images || 1)) * 100}%` }}
+                                    />
+                                </div>
+                                <div className="flex items-center justify-between text-[9px] font-bold text-slate-400 mt-1 uppercase tracking-tighter">
+                                    <span>{(stats.qc_stats.total_accepted + stats.qc_stats.total_rejected).toLocaleString()} REVIEWED</span>
+                                    <span className="text-blue-500 italic">Remaining: {(stats.performance.target_images - (stats.qc_stats.total_accepted + stats.qc_stats.total_rejected)).toLocaleString()}</span>
+                                </div>
                             </div>
                         </div>
                     </CardContent>
@@ -186,6 +207,13 @@ const VendorDashboard: React.FC = () => {
                                 <span className="text-[10px] font-black uppercase text-slate-400">Rejected Images</span>
                                 <span className="text-base font-black text-red-600">{stats.qc_stats.total_rejected.toLocaleString()}</span>
                             </div>
+                            <div className="flex items-center justify-between bg-amber-50/50 -mx-5 px-5 py-2">
+                                <div className="flex items-center gap-1.5">
+                                    <Clock className="h-3 w-3 text-amber-500" />
+                                    <span className="text-[10px] font-black uppercase text-amber-600">Review Pending</span>
+                                </div>
+                                <span className="text-base font-black text-amber-600">{stats.qc_stats.total_qc_pending.toLocaleString()}</span>
+                            </div>
                         </div>
                     </CardContent>
                 </Card>
@@ -193,21 +221,21 @@ const VendorDashboard: React.FC = () => {
 
                 {/* Efficiency/Throughput */}
                 <Card className="border-slate-200 flex flex-col justify-center text-center p-5 bg-white shadow-sm">
-                    <div className="h-16 w-16 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-4">
-                        <TrendingUp className="h-8 w-8 text-emerald-600" />
+                    <div className="h-16 w-16 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <TrendingUp className="h-8 w-8 text-blue-600" />
                     </div>
-                    <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest mb-1">Throughput</h3>
-                    <p className="text-2xl font-black text-slate-900 mb-1">{stats.performance.completed_batches}</p>
-                    <p className="text-xs text-slate-500 font-bold mb-4 italic leading-tight">Total Batches successfully pushed through the system</p>
+                    <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest mb-1">QC Verification</h3>
+                    <p className="text-2xl font-black text-slate-900 mb-1">{stats.performance.verified_batches}</p>
+                    <p className="text-xs text-slate-500 font-bold mb-4 italic leading-tight">Batches successfully finalized by QC team</p>
 
                     <div className="flex gap-2">
                         <div className="flex-1 p-2 bg-slate-50 rounded-xl">
-                            <p className="text-[10px] font-bold text-slate-400 uppercase">Current</p>
-                            <p className="text-sm font-black text-blue-600">{stats.performance.total_batches - stats.performance.completed_batches}</p>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase">Uploaded</p>
+                            <p className="text-sm font-black text-emerald-600">{stats.performance.uploaded_batches}</p>
                         </div>
                         <div className="flex-1 p-2 bg-slate-50 rounded-xl">
-                            <p className="text-[10px] font-bold text-slate-400 uppercase">Rework</p>
-                            <p className="text-sm font-black text-red-600">{stats.performance.rework_needed}</p>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase">In Pipe</p>
+                            <p className="text-sm font-black text-blue-600">{stats.performance.total_batches - stats.performance.verified_batches}</p>
                         </div>
                     </div>
                 </Card>

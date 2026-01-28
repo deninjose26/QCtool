@@ -80,6 +80,7 @@ const OperatorImagePreview: React.FC = () => {
     const [currentPage, setCurrentPage] = useState(1);
     const [searchQuery, setSearchQuery] = useState('');
     const [isBlurred, setIsBlurred] = useState(false);
+    const [showRejectedOnly, setShowRejectedOnly] = useState(false);
 
     // Filter Options States
     const [projects, setProjects] = useState<string[]>([]);
@@ -229,9 +230,11 @@ const OperatorImagePreview: React.FC = () => {
     }, [bookFilter, currentIndex]);
 
     // Search and Filter Logic
-    const filteredImages = images.filter(img =>
-        img.image_name.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    const filteredImages = images.filter(img => {
+        const matchesSearch = img.image_name.toLowerCase().includes(searchQuery.toLowerCase());
+        const matchesRejected = showRejectedOnly ? img.status?.toLowerCase() === 'rejected' : true;
+        return matchesSearch && matchesRejected;
+    });
 
     // Security & Anti-Screenshot logic
     useEffect(() => {
@@ -420,7 +423,7 @@ const OperatorImagePreview: React.FC = () => {
                         </Select>
                     </div>
                 </div>
-                <div className="flex items-center gap-2 mt-2">
+                <div className="flex items-center gap-4 mt-2">
                     <div className="relative flex-1 group">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 group-focus-within:text-indigo-500 transition-colors" />
                         <input
@@ -430,6 +433,16 @@ const OperatorImagePreview: React.FC = () => {
                             onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
                             className="w-full h-9 pl-9 pr-4 bg-white border border-slate-200 rounded-xl text-[11px] font-medium outline-none focus:ring-4 focus:ring-indigo-500/5 transition-all"
                         />
+                    </div>
+                    <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
+                        <input
+                            type="checkbox"
+                            id="showRejected"
+                            checked={showRejectedOnly}
+                            onChange={(e) => { setShowRejectedOnly(e.target.checked); setCurrentPage(1); }}
+                            className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                        />
+                        <Label htmlFor="showRejected" className="text-[11px] font-bold text-slate-600 cursor-pointer uppercase tracking-tight">Rejected Only</Label>
                     </div>
                 </div>
             </div>
@@ -448,6 +461,9 @@ const OperatorImagePreview: React.FC = () => {
                                     <span className="text-[11px] font-bold truncate text-slate-700 tracking-wide font-mono">
                                         {currentImage.image_name}
                                     </span>
+                                    {currentImage.status?.toLowerCase() === 'rejected' && (
+                                        <Badge variant="destructive" className="h-5 px-2 text-[8px] font-black uppercase tracking-widest bg-rose-500">Rejected</Badge>
+                                    )}
                                 </>
                             )}
                         </div>
@@ -515,12 +531,22 @@ const OperatorImagePreview: React.FC = () => {
                                     onError={() => setImageLoadError(true)}
                                 />
 
-                                {/* Universal Brand Watermark */}
-                                <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10 overflow-hidden px-10">
-                                    <div className="text-[0.5rem] md:text-[2.5rem] font-black text-slate-900/[0.25] transform -rotate-12 select-none pointer-events-none uppercase tracking-tight whitespace-nowrap drop-shadow-sm text-center">
-                                        FamilyaConnect
+
+                                {/* Status Watermarks */}
+                                {currentImage.status?.toLowerCase() === 'rejected' && (
+                                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
+                                        <div className="text-2xl md:text-6xl font-black text-rose-600/25 transform -rotate-12 select-none uppercase tracking-tighter shadow-sm">
+                                            REJECTED
+                                        </div>
                                     </div>
-                                </div>
+                                )}
+                                {currentImage.status?.toLowerCase() === 'approved' && (
+                                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
+                                        <div className="text-2xl md:text-6xl font-black text-emerald-600/20 transform -rotate-12 select-none uppercase tracking-tighter shadow-sm">
+                                            ACCEPTED
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         ) : (
                             <div className="flex flex-col items-center gap-4 text-slate-300">
@@ -604,8 +630,13 @@ const OperatorImagePreview: React.FC = () => {
 
                                                 <div className={cn(
                                                     "absolute bottom-0 left-0 right-0 h-1.5 rounded-b-[10px]",
-                                                    isActive ? "bg-white/40" : "bg-green-500/20"
+                                                    isActive ? "bg-white/40" : (img.status?.toLowerCase() === 'rejected' ? "bg-rose-500" : "bg-green-500/20")
                                                 )} />
+                                                {img.status?.toLowerCase() === 'rejected' && (
+                                                    <div className="absolute top-1 right-1">
+                                                        <AlertCircle className={cn("h-3 w-3", isActive ? "text-white" : "text-rose-500")} />
+                                                    </div>
+                                                )}
                                             </button>
                                         );
                                     })}

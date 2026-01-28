@@ -27,6 +27,7 @@ class Token(BaseModel):
     token_type: str
     user_id: str
     username: str
+    name: str | None = None
     role: str
 
 @router.get("/")
@@ -121,6 +122,7 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), session: Session = D
         "token_type": "bearer",
         "user_id": str(user.user_id),
         "username": user.username,
+        "name": user.name,
         "role": user.user_role
     }
 
@@ -160,6 +162,11 @@ def update_profile(
     session.add(current_user)
     session.commit()
     session.refresh(current_user)
+    return current_user
+
+@router.get("/me", response_model=User)
+def get_me(current_user: User = Depends(get_current_user)):
+    """Get current user's profile"""
     return current_user
 
 @router.post("/profile/change-password")

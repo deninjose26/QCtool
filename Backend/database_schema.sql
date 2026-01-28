@@ -100,6 +100,7 @@ CREATE TABLE projects (
     project_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     project_code VARCHAR(100) UNIQUE NOT NULL,
     project_name VARCHAR(255) NOT NULL,
+    description TEXT,
     created_by UUID NOT NULL REFERENCES users(user_id),
     created_date TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'UTC' + INTERVAL '5 hours 30 minutes'),
     last_updated TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'UTC' + INTERVAL '5 hours 30 minutes')

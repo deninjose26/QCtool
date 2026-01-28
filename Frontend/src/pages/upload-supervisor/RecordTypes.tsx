@@ -23,6 +23,7 @@ import { Edit, Trash2, Loader2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { formatError } from '@/lib/utils';
+import { API_BASE_URL } from '@/config';
 
 const RecordTypes: React.FC = () => {
     const { user } = useAuth();
@@ -37,7 +38,7 @@ const RecordTypes: React.FC = () => {
 
     const fetchUsers = async () => {
         try {
-            const response = await fetch('http://localhost:8000/admin/users', { headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` } });
+            const response = await fetch(`${API_BASE_URL}/admin/users`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` } });
             if (response.ok) {
                 const data = await response.json();
                 setUsers(data.map((u: any) => ({ id: u.user_id, name: u.name, username: u.username, email: u.email, role: u.user_role })));
@@ -48,23 +49,33 @@ const RecordTypes: React.FC = () => {
     const fetchData = async () => {
         try {
             setIsLoading(true);
-            const [sourcesRes, typesRes] = await Promise.all([
-                fetch('http://localhost:8000/admin/sources', { headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` } }),
-                fetch('http://localhost:8000/admin/record-types', { headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` } })
+            const [sourcesRes, typesRes, projectsRes] = await Promise.all([
+                fetch(`${API_BASE_URL}/admin/sources`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` } }),
+                fetch(`${API_BASE_URL}/admin/record-types`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` } }),
+                fetch(`${API_BASE_URL}/admin/projects`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` } })
             ]);
 
-            if (sourcesRes.status === 200 && typesRes.status === 200) {
-                const [sourcesData, typesData] = await Promise.all([sourcesRes.json(), typesRes.json()]);
+            if (sourcesRes.status === 200 && typesRes.status === 200 && projectsRes.status === 200) {
+                const [sourcesData, typesData, projectsData] = await Promise.all([
+                    sourcesRes.json(),
+                    typesRes.json(),
+                    projectsRes.json()
+                ]);
 
-                const mappedSources = sourcesData.map((s: any) => ({ id: s.source_id, name: s.source_name }));
+                const mappedSources = sourcesData.map((s: any) => ({ id: s.source_id, name: s.source_name, projectId: s.project_id }));
+                const mappedProjects = projectsData.map((p: any) => ({ id: p.project_id, name: p.project_name }));
+
                 const mappedTypes = typesData.map((t: any) => {
                     const source = mappedSources.find((s: any) => s.id === t.source_id);
+                    const project = source ? mappedProjects.find((p: any) => p.id === source.projectId) : null;
                     return {
                         id: t.record_type_id,
                         name: t.record_type_name,
                         code: t.record_type_code,
                         sourceId: t.source_id,
                         sourceName: source?.name || 'Unknown',
+                        projectId: source?.projectId,
+                        projectName: project?.name || 'Unknown',
                         createdBy: t.created_by,
                         createdAt: t.created_date
                     };
@@ -105,7 +116,7 @@ const RecordTypes: React.FC = () => {
 
         try {
             if (editingType) {
-                const response = await fetch(`http://localhost:8000/admin/record-types/${editingType.id}`, {
+                const response = await fetch(`${API_BASE_URL}/admin/record-types/${editingType.id}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` },
                     body: JSON.stringify({ record_type_name: formData.name })
@@ -116,7 +127,7 @@ const RecordTypes: React.FC = () => {
                     setIsDialogOpen(false);
                 }
             } else {
-                const response = await fetch('http://localhost:8000/upload-sup/record-types', {
+                const response = await fetch(`${API_BASE_URL}/upload-sup/record-types`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` },
                     body: JSON.stringify({
@@ -140,7 +151,7 @@ const RecordTypes: React.FC = () => {
     const handleDelete = async (id: string) => {
         if (!confirm('Are you sure?')) return;
         try {
-            const response = await fetch(`http://localhost:8000/admin/record-types/${id}`, {
+            const response = await fetch(`${API_BASE_URL}/admin/record-types/${id}`, {
                 method: 'DELETE',
                 headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
             });
@@ -149,9 +160,10 @@ const RecordTypes: React.FC = () => {
     };
 
     const columns = [
-        { key: 'code', header: 'Code', sortable: true },
-        { key: 'name', header: 'Type Name', sortable: true },
+        { key: 'projectName', header: 'Project', sortable: true },
         { key: 'sourceName', header: 'Source', sortable: true },
+        { key: 'name', header: 'Type Name', sortable: true },
+        { key: 'code', header: 'Code', sortable: true },
         {
             key: 'createdBy',
             header: 'Created By',

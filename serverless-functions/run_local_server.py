@@ -90,5 +90,6 @@ if __name__ == '__main__':
         host='0.0.0.0',
         port=5000,
         debug=True,
+        threaded=True,      # CRITICAL: Handle multiple conversions concurrently
         use_reloader=False  # Disable reloader to avoid double execution
     )

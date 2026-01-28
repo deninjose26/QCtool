@@ -6,7 +6,10 @@ import StatusBadge from '@/components/common/StatusBadge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
-import { Upload as UploadIcon, FolderOpen, CheckCircle, Loader2, ListFilter, Files, Info, Wifi, WifiOff, Pause, Play, Eye } from 'lucide-react';
+import { Upload as UploadIcon, FolderOpen, CheckCircle, Loader2, ListFilter, Files, Info, Wifi, WifiOff, Pause, Play, Eye, Edit, Settings2, AlertCircle } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
@@ -40,6 +43,8 @@ interface OperatorBatch {
   status: 'pending' | 'uploading' | 'uploaded';
   created_date: string;
   is_reupload: boolean;
+  is_partial: boolean;
+  upload_type: string;
 }
 
 const Upload: React.FC = () => {
@@ -62,6 +67,16 @@ const Upload: React.FC = () => {
   const [queueCount, setQueueCount] = useState(0);
   const [queuedBatchUids, setQueuedBatchUids] = useState<string[]>([]);
   const [activeUploadUid, setActiveUploadUid] = useState<string | null>(null);
+
+  // Edit State
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editingBatch, setEditingBatch] = useState<OperatorBatch | null>(null);
+  const [editFields, setEditFields] = useState({
+    book_name: '',
+    total_count: 0,
+    uploading_count: 0
+  });
+  const [isUpdating, setIsUpdating] = useState(false);
 
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -115,6 +130,62 @@ const Upload: React.FC = () => {
       toast({ title: 'Error', description: 'Failed to load batches', variant: 'destructive' });
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleEditClick = (batch: OperatorBatch) => {
+    setEditingBatch(batch);
+    setEditFields({
+      book_name: batch.book_name,
+      total_count: batch.total_count,
+      uploading_count: batch.target_count
+    });
+    setIsEditModalOpen(true);
+  };
+
+  const handleUpdateBatch = async () => {
+    if (!editingBatch || !token) return;
+
+    // Basic validation
+    if (editingBatch.is_reupload || editingBatch.status === 'uploading') {
+      // Logic from backend handles more precisely, but frontend should block obvious cases
+    }
+
+    try {
+      setIsUpdating(true);
+      const res = await fetch(`${API_BASE_URL}/operator/batches/${editingBatch.batch_uid}`, {
+        method: 'PUT',
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          book_name: editFields.book_name,
+          total_images: Number(editFields.total_count),
+          uploading_count: Number(editFields.uploading_count)
+        })
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Update failed');
+      }
+
+      toast({
+        title: 'Success',
+        description: 'Batch updated successfully',
+      });
+
+      setIsEditModalOpen(false);
+      fetchBatches();
+    } catch (error) {
+      toast({
+        title: 'Update Failed',
+        description: error instanceof Error ? error.message : 'An error occurred',
+        variant: 'destructive'
+      });
+    } finally {
+      setIsUpdating(false);
     }
   };
 
@@ -448,7 +519,7 @@ const Upload: React.FC = () => {
     }
   }, [wasOffline, isOnline, isPaused]);
 
-  const activeBatches = batches.filter(batch => batch.status !== 'uploaded');
+  const activeBatches = batches.filter(batch => batch.status !== 'uploaded' && !batch.is_reupload);
   const activeQueueBatch = batches.find(b => queuedBatchUids.includes(b.batch_uid));
   const activeQueueIsReupload = activeQueueBatch ? activeQueueBatch.is_reupload : null;
 
@@ -554,34 +625,47 @@ const Upload: React.FC = () => {
         }
 
         return (
-          <Button
-            size="sm"
-            onClick={() => isCurrentActive && isUploading ? handlePauseResume() : handleUploadClick(item)}
-            disabled={isGlobalBlocked}
-            className={`h-8 gap-2 transition-all duration-300 ${isActivelyUploading
-              ? 'bg-primary/40 cursor-not-allowed text-white'
-              : isCurrentlyPaused
-                ? 'bg-amber-500 hover:bg-amber-600 animate-pulse text-white shadow-md'
-                : 'bg-primary hover:bg-primary/90 shadow-sm'
-              }`}
-          >
-            {isActivelyUploading ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span className="animate-pulse">Uploading...</span>
-              </>
-            ) : isCurrentlyPaused ? (
-              <>
-                <Play className="h-4 w-4 fill-white" />
-                Resume
-              </>
-            ) : (
-              <>
-                <FolderOpen className="h-4 w-4" />
-                {item.completed_count > 0 ? 'Continue' : 'Upload'}
-              </>
-            )}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handleEditClick(item)}
+              disabled={isActivelyUploading || isQueued || isGlobalBlocked}
+              className="h-8 w-8 p-0 border-slate-200 hover:bg-slate-50 hover:text-primary transition-all shadow-sm"
+              title="Edit Batch Info"
+            >
+              <Edit className="h-3.5 w-3.5" />
+            </Button>
+
+            <Button
+              size="sm"
+              onClick={() => isCurrentActive && isUploading ? handlePauseResume() : handleUploadClick(item)}
+              disabled={isGlobalBlocked}
+              className={`h-8 gap-2 transition-all duration-300 min-w-[100px] ${isActivelyUploading
+                ? 'bg-primary/40 cursor-not-allowed text-white'
+                : isCurrentlyPaused
+                  ? 'bg-amber-500 hover:bg-amber-600 animate-pulse text-white shadow-md'
+                  : 'bg-primary hover:bg-primary/90 shadow-sm'
+                }`}
+            >
+              {isActivelyUploading ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span className="animate-pulse">Uploading...</span>
+                </>
+              ) : isCurrentlyPaused ? (
+                <>
+                  <Play className="h-4 w-4 fill-white" />
+                  Resume
+                </>
+              ) : (
+                <>
+                  <FolderOpen className="h-4 w-4" />
+                  {item.completed_count > 0 ? 'Continue' : 'Upload'}
+                </>
+              )}
+            </Button>
+          </div>
         );
       }
     }
@@ -812,6 +896,101 @@ const Upload: React.FC = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Edit Batch Info Dialog */}
+      <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
+        <DialogContent className="sm:max-w-[450px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Settings2 className="h-5 w-5 text-primary" />
+              Edit Batch Configuration
+            </DialogTitle>
+            <DialogDescription>
+              Update information for batch: <span className="font-mono font-bold text-foreground">{editingBatch?.batch_id}</span>
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="edit_book_name">Book Name</Label>
+              <Input
+                id="edit_book_name"
+                value={editFields.book_name}
+                onChange={(e) => setEditFields(prev => ({ ...prev, book_name: e.target.value.toUpperCase() }))}
+                className="uppercase font-bold"
+              />
+            </div>
+
+            {editingBatch?.status === 'pending' || editingBatch?.completed_count === 0 ? (
+              <div className="grid gap-4">
+                {editingBatch?.upload_type !== 'Complete' ? (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="grid gap-2">
+                      <Label htmlFor="edit_total_count">Total Images (Book)</Label>
+                      <Input
+                        id="edit_total_count"
+                        type="number"
+                        value={editFields.total_count}
+                        onChange={(e) => setEditFields(prev => ({ ...prev, total_count: Number(e.target.value) }))}
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="edit_target_count">Batch Target</Label>
+                      <Input
+                        id="edit_target_count"
+                        type="number"
+                        value={editFields.uploading_count}
+                        onChange={(e) => setEditFields(prev => ({ ...prev, uploading_count: Number(e.target.value) }))}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid gap-2">
+                    <Label htmlFor="edit_master_count">Total Images to Upload</Label>
+                    <Input
+                      id="edit_master_count"
+                      type="number"
+                      value={editFields.uploading_count}
+                      onChange={(e) => setEditFields(prev => ({
+                        ...prev,
+                        uploading_count: Number(e.target.value),
+                        total_count: Number(e.target.value)
+                      }))}
+                    />
+                    <p className="text-[10px] text-muted-foreground italic">For Complete batches, target and total are identical.</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <Alert className="bg-slate-50 border-slate-200">
+                <Info className="h-4 w-4" />
+                <AlertTitle className="text-xs font-bold uppercase">Counts Locked</AlertTitle>
+                <AlertDescription className="text-xs">
+                  Image counts cannot be modified once an upload has started.
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {editingBatch?.is_reupload && (
+              <Alert variant="destructive" className="bg-amber-50 border-amber-200 text-amber-900">
+                <AlertCircle className="h-4 w-4 text-amber-600" />
+                <AlertTitle className="text-xs font-bold uppercase">Lineage Note</AlertTitle>
+                <AlertDescription className="text-xs opacity-90">
+                  Total Images must be greater than Batch Target for Rework/Partial batches.
+                </AlertDescription>
+              </Alert>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setIsEditModalOpen(false)}>Cancel</Button>
+            <Button onClick={handleUpdateBatch} disabled={isUpdating}>
+              {isUpdating ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save Changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
     </div>
   );
 };
