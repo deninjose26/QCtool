@@ -126,7 +126,7 @@ const Landing: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-4xl mx-auto">
             {[
               { value: '10M+', label: 'Images Processed' },
-              { value: '500+', label: 'Projects Completed' },
+              { value: '500+', label: 'Batches Completed' },
               { value: '99.9%', label: 'Uptime SLA' },
             ].map((stat, i) => (
               <div key={i} className="text-center p-6 rounded-xl bg-primary-foreground/5 backdrop-blur-sm border border-primary-foreground/10 hover:bg-primary-foreground/10 transition-all">
@@ -235,7 +235,7 @@ const Landing: React.FC = () => {
             <div>
               <h4 className="font-semibold mb-4">Product</h4>
               <ul className="space-y-2 text-sm text-muted-foreground">
-                <li><a href="#" className="hover:text-foreground transition-colors">Features</a></li>
+                <li><Link to="/documentation" className="hover:text-foreground transition-colors">Features</Link></li>
                 <li><a href="#" className="hover:text-foreground transition-colors">Pricing</a></li>
                 <li><Link to="/documentation" className="hover:text-foreground transition-colors">Documentation</Link></li>
               </ul>
@@ -245,7 +245,7 @@ const Landing: React.FC = () => {
               <ul className="space-y-2 text-sm text-muted-foreground">
                 <li><a href="#" className="hover:text-foreground transition-colors">About</a></li>
                 <li><a href="#" className="hover:text-foreground transition-colors">Contact</a></li>
-                <li><a href="#" className="hover:text-foreground transition-colors">Careers</a></li>
+                <li><a href="#" className="hover:text-foreground transition-colors">Support</a></li>
               </ul>
             </div>
             <div>

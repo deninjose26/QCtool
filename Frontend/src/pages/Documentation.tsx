@@ -42,11 +42,11 @@ const Documentation: React.FC = () => {
             icon: Users,
             content: [
                 {
-                    subtitle: 'Super Admin',
+                    subtitle: 'Admin',
                     text: 'Full system access including user management, project setup, and system configuration. Can view all reports and manage all aspects of the platform.',
                 },
                 {
-                    subtitle: 'Upload Supervisor',
+                    subtitle: 'Upload Manager',
                     text: 'Manages vendors and batch allocations. Reviews upload reports, monitors progress, and oversees the upload workflow.',
                 },
                 {
@@ -58,7 +58,7 @@ const Documentation: React.FC = () => {
                     text: 'Creates batches and uploads scanned images. Can handle both complete and partial uploads, as well as rework batches.',
                 },
                 {
-                    subtitle: 'QC Supervisor',
+                    subtitle: 'QC Manager',
                     text: 'Manages QC users and allocates batches for quality control. Reviews completed QC tasks and makes final approval decisions.',
                 },
                 {
@@ -97,7 +97,7 @@ const Documentation: React.FC = () => {
             content: [
                 {
                     subtitle: '1. Batch Allocation',
-                    text: 'QC Supervisors allocate batches to QC Users based on workload and expertise. Allocated batches appear in the QC User\'s task list.',
+                    text: 'QC Managers allocate batches to QC Users based on workload and expertise. Allocated batches appear in the QC User\'s task list.',
                 },
                 {
                     subtitle: '2. Image Review',
@@ -109,11 +109,11 @@ const Documentation: React.FC = () => {
                 },
                 {
                     subtitle: '4. Task Completion',
-                    text: 'After reviewing all images, mark the task as complete. The QC Supervisor is notified for final verification.',
+                    text: 'After reviewing all images, mark the task as complete. The QC Manager is notified for final verification.',
                 },
                 {
-                    subtitle: '5. Supervisor Verification',
-                    text: 'QC Supervisors review completed tasks and make final approval decisions. They can approve the batch or send it back for rework.',
+                    subtitle: '5. Manager Verification',
+                    text: 'QC Managers review completed tasks and make final approval decisions. They can approve the batch or send it back for rework.',
                 },
             ],
         },
