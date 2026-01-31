@@ -56,6 +56,9 @@ interface AdminQCHistoryTask {
     qc_completed_date: string;
     qc_batch_status: string;
     upload_type: string;
+    parent_batch_uid?: string;
+    replaced_by_batch_uid?: string;
+    status_detail?: string;
 }
 
 const STATUS_DISPLAY_NAMES: Record<string, string> = {
@@ -247,19 +250,34 @@ const AdminQCHistory: React.FC = () => {
                 </code>
             )
         },
-        { key: 'project_name', header: 'Project' },
+        {
+            key: 'project_name',
+            header: 'Project',
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
         {
             key: 'upload_type',
             header: 'Type',
-            render: (val: string) => (
-                <Badge className={cn(
-                    "text-[10px] font-bold uppercase",
-                    val === 'Complete' ? "bg-emerald-100 text-emerald-700 border-emerald-200" :
-                        val === 'Partial' ? "bg-blue-100 text-blue-700 border-blue-200" :
-                            "bg-amber-100 text-amber-700 border-amber-200"
-                )}>
-                    {val}
-                </Badge>
+            render: (val: string, item: AdminQCHistoryTask) => (
+                <div className="flex flex-col gap-1">
+                    <Badge className={cn(
+                        "text-[10px] font-bold uppercase w-fit",
+                        val === 'Complete' ? "bg-emerald-100 text-emerald-700 border-emerald-200" :
+                            val === 'Partial' ? "bg-blue-100 text-blue-700 border-blue-200" :
+                                "bg-amber-100 text-amber-700 border-amber-200"
+                    )}>
+                        {val}
+                    </Badge>
+                    {item.status_detail && (
+                        <span className={cn(
+                            "text-[9px] font-black uppercase px-1 py-0.5 rounded",
+                            item.status_detail === 'Replaced by Rework' ? "text-slate-400 bg-slate-100 line-through decoration-slate-400" :
+                                "text-indigo-600 bg-indigo-50"
+                        )}>
+                            {item.status_detail}
+                        </span>
+                    )}
+                </div>
             )
         },
         {
@@ -267,7 +285,11 @@ const AdminQCHistory: React.FC = () => {
             header: 'Vendor',
             render: (val: string) => <span className="text-[10px] font-medium text-slate-600">{val}</span>
         },
-        { key: 'location_name', header: 'Location' },
+        {
+            key: 'location_name',
+            header: 'Location',
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
         {
             key: 'qc_user_name',
             header: 'QC User',
@@ -278,8 +300,21 @@ const AdminQCHistory: React.FC = () => {
                 </div>
             )
         },
-        { key: 'record_owner_name', header: 'Owner' },
-        { key: 'record_type_name', header: 'Type' },
+        {
+            key: 'record_owner_name',
+            header: 'Owner',
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
+        {
+            key: 'record_type_name',
+            header: 'Type',
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
+        {
+            key: 'record_name',
+            header: 'Book Name',
+            render: (val: string) => <span className="text-[10px] font-black text-slate-700 max-w-[150px] truncate block" title={val}>{val}</span>
+        },
         { key: 'total_count', header: 'Images', sortable: true },
         {
             key: 'accepted_count',

@@ -208,7 +208,7 @@ const RecordTypes: React.FC = () => {
                                 <SelectContent>{sources.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
                             </Select>
                         </div>
-                        <div className="space-y-2"><Label>Code</Label><Input value={editingType ? formData.code : 'Auto-generated (e.g., RT001)'} disabled className="bg-muted" /></div>
+
                         <div className="space-y-2"><Label>Name</Label><Input value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="e.g., Birth Certificate" /></div>
                     </div>
                     <DialogFooter><Button onClick={handleSubmit}>{editingType ? 'Update' : 'Create'}</Button></DialogFooter>

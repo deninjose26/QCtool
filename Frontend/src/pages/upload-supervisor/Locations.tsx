@@ -235,10 +235,7 @@ const Locations: React.FC = () => {
                                 <SelectContent>{sources.filter(s => s.projectId === formData.projectId).map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
                             </Select>
                         </div>
-                        <div className="space-y-2">
-                            <Label>Code</Label>
-                            <Input value={editingLocation ? formData.code : 'Auto-generated (e.g., L001)'} disabled className="bg-muted" />
-                        </div>
+
                         <div className="space-y-2">
                             <Label>Name</Label>
                             <Input value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="e.g., Room 101" />

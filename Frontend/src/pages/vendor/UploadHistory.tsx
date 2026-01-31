@@ -210,12 +210,32 @@ const VendorUploadHistory: React.FC = () => {
                 return <code className={cn("text-xs font-bold", colors[item.upload_type] || "text-primary")}>{val}</code>;
             }
         },
-        { key: 'project_name', header: 'Project' },
-        { key: 'source_name', header: 'Source' },
+        {
+            key: 'project_name',
+            header: 'Project',
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
+        {
+            key: 'source_name',
+            header: 'Source',
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
         { key: 'operator_name', header: 'Operator' },
-        { key: 'location_name', header: 'Location' },
-        { key: 'record_owner_name', header: 'Record Owner' },
-        { key: 'record_type_name', header: 'Record Type' },
+        {
+            key: 'location_name',
+            header: 'Location',
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
+        {
+            key: 'record_owner_name',
+            header: 'Record Owner',
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
+        {
+            key: 'record_type_name',
+            header: 'Record Type',
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
         {
             key: 'upload_type',
             header: 'Upload Type',
@@ -230,7 +250,11 @@ const VendorUploadHistory: React.FC = () => {
                 </Badge>
             )
         },
-        { key: 'book_name', header: 'Book' },
+        {
+            key: 'book_name',
+            header: 'Book',
+            render: (val: string) => <span className="text-[10px] font-black text-slate-700 max-w-[120px] truncate block" title={val}>{val}</span>
+        },
         {
             key: 'count',
             header: 'Images',

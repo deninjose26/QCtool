@@ -206,12 +206,42 @@ const SupervisorUploadHistory: React.FC = () => {
     };
 
     const columns = [
-        { key: 'project_name', header: 'Project', sortable: true },
-        { key: 'source_name', header: 'Source', sortable: true },
-        { key: 'location_name', header: 'Location', sortable: true },
-        { key: 'record_owner_name', header: 'Owner', sortable: true },
-        { key: 'record_type_name', header: 'Type', sortable: true },
-        { key: 'book_name', header: 'Book', sortable: true },
+        {
+            key: 'project_name',
+            header: 'Project',
+            sortable: true,
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
+        {
+            key: 'source_name',
+            header: 'Source',
+            sortable: true,
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
+        {
+            key: 'location_name',
+            header: 'Location',
+            sortable: true,
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
+        {
+            key: 'record_owner_name',
+            header: 'Owner',
+            sortable: true,
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
+        {
+            key: 'record_type_name',
+            header: 'Type',
+            sortable: true,
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
+        {
+            key: 'book_name',
+            header: 'Book Name',
+            sortable: true,
+            render: (val: string) => <span className="text-[10px] font-black text-slate-700 max-w-[120px] truncate block" title={val}>{val}</span>
+        },
         {
             key: 'batch_id',
             header: 'Batch ID',

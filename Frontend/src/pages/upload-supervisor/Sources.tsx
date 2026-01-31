@@ -297,15 +297,6 @@ const Sources: React.FC = () => {
                             </Select>
                         </div>
                         <div className="space-y-2">
-                            <Label htmlFor="code">Source Code</Label>
-                            <Input
-                                id="code"
-                                value={editingSource ? formData.code : 'Auto-generated (e.g., S001)'}
-                                disabled
-                                className="bg-muted"
-                            />
-                        </div>
-                        <div className="space-y-2">
                             <Label htmlFor="name">Source Name</Label>
                             <Input
                                 id="name"

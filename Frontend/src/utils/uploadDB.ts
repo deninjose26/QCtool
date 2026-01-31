@@ -10,7 +10,8 @@ export interface QueuedFile {
     id?: number;
     batch_uid: string;
     file_name: string;
-    file_blob: Blob;
+    file_path?: string; // Lightweight path reference
+    file_blob?: Blob; // Runtime attachment for instant mode
     file_size: number;
     status: 'pending' | 'uploading' | 'uploaded' | 'failed';
     s3_path?: string;
@@ -22,10 +23,11 @@ export interface QueuedFile {
 
 export interface QueuedBatch {
     batch_uid: string;
-    status: 'pending' | 'queued' | 'uploading' | 'completed';
+    status: 'pending' | 'queued' | 'uploading' | 'completed' | 'interrupted';
     total_files: number;
     queued_at: Date;
     is_reupload: boolean;
+    directory_handle?: any; // FileSystemDirectoryHandle
 }
 
 export interface SyncAction {
@@ -43,7 +45,7 @@ class UploadDatabase extends Dexie {
 
     constructor() {
         super('QCToolUploads');
-        this.version(3).stores({
+        this.version(4).stores({
             upload_queue: '++id, batch_uid, status, file_name',
             batch_queue: 'batch_uid, status, queued_at',
             sync_queue: 'id, action, timestamp'
@@ -55,20 +57,52 @@ export const db = new UploadDatabase();
 
 /**
  * Store files in the upload queue for a specific batch
+ * Processes in chunks to avoid blocking the main thread for large batches
  */
-export async function storeFilesInQueue(batch_uid: string, files: File[]): Promise<void> {
-    const queuedFiles: QueuedFile[] = files.map(file => ({
-        batch_uid,
-        file_name: file.name,
-        file_blob: file,
-        file_size: file.size,
-        status: 'pending',
-        upload_progress: 0,
-        created_at: new Date(),
-        updated_at: new Date()
-    }));
+export async function storeFilesInQueue(
+    batch_uid: string,
+    files: File[],
+    onProgress?: (progress: number) => void,
+    isResume: boolean = false
+): Promise<void> {
+    const CHUNK_SIZE = 100; // Increased since we're only storing metadata now
+    const total = files.length;
 
-    await db.upload_queue.bulkAdd(queuedFiles);
+    if (!isResume) {
+        console.log(`🧹 Clearing previous data for batch ${batch_uid}...`);
+        await clearBatch(batch_uid);
+    } else {
+        console.log(`🔄 Resuming preparation for batch ${batch_uid}...`);
+    }
+
+    for (let i = 0; i < total; i += CHUNK_SIZE) {
+        const chunk = files.slice(i, i + CHUNK_SIZE);
+        const queuedFiles: QueuedFile[] = chunk.map(file => ({
+            batch_uid,
+            file_name: file.name,
+            file_path: file.webkitRelativePath || file.name, // Store path reference
+            file_size: file.size,
+            status: 'pending',
+            upload_progress: 0,
+            created_at: new Date(),
+            updated_at: new Date()
+        }));
+
+        try {
+            await db.upload_queue.bulkAdd(queuedFiles);
+        } catch (error) {
+            console.error('Bulk add error:', error);
+            throw error;
+        }
+
+        if (onProgress) {
+            const currentProgress = Math.min(100, Math.round(((i + chunk.length) / total) * 100));
+            onProgress(currentProgress);
+        }
+
+        // Minimal delay since we're not copying heavy blobs
+        await new Promise(resolve => setTimeout(resolve, 10));
+    }
 }
 
 /**
@@ -173,13 +207,19 @@ export async function hasPendingUploads(): Promise<boolean> {
 /**
  * Add a batch to the global queue
  */
-export async function addToBatchQueue(batch_uid: string, total_files: number, is_reupload: boolean): Promise<void> {
+export async function addToBatchQueue(
+    batch_uid: string,
+    total_files: number,
+    is_reupload: boolean,
+    directory_handle?: any // Allow storing the handle
+): Promise<void> {
     await db.batch_queue.put({
         batch_uid,
         status: 'queued',
         total_files,
         queued_at: new Date(),
-        is_reupload
+        is_reupload,
+        directory_handle
     });
 }
 

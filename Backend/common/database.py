@@ -17,7 +17,11 @@ DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NA
 # We use connect_args to set the search_path to our schema for every connection
 engine = create_engine(
     DATABASE_URL, 
-    echo=True,
+    echo=False,
+    pool_size=20,
+    max_overflow=20,
+    pool_timeout=30,
+    pool_recycle=1800,
     connect_args={"options": f"-c search_path={DB_SCHEMA}"}
 )
 

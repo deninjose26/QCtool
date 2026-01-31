@@ -161,9 +161,10 @@ class Batch(SQLModel, table=True):
     is_complete: bool = Field(default=False)
     is_partial: bool = Field(default=False)
     is_reupload: bool = Field(default=False)
+    parent_batch_uid: Optional[UUID] = Field(default=None, foreign_key="batch.batch_uid")
     vendor_approved: bool = Field(default=True)
-    created_date: datetime = Field(default_factory=datetime.utcnow)
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
+    created_date: datetime = Field(default_factory=get_ist_now)
+    last_updated: datetime = Field(default_factory=get_ist_now)
 
 class Upload(SQLModel, table=True):
     __tablename__ = "upload"
@@ -233,3 +234,10 @@ class Notification(SQLModel, table=True):
     link: Optional[str] = None
     is_read: bool = Field(default=False)
     created_date: datetime = Field(default_factory=get_ist_now)
+
+class SystemSettings(SQLModel, table=True):
+    __tablename__ = "system_settings"
+    setting_id: str = Field(primary_key=True)
+    setting_value: str
+    description: Optional[str] = None
+    last_updated: datetime = Field(default_factory=get_ist_now)

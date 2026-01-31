@@ -265,10 +265,30 @@ const BatchAllocation = () => {
                 </span>
             )
         },
-        { key: 'project_name', header: 'Project', sortable: true },
-        { key: 'source_name', header: 'Source', sortable: true },
-        { key: 'location_name', header: 'Location', sortable: true },
-        { key: 'record_owner_name', header: 'Record Owner', sortable: true },
+        {
+            key: 'project_name',
+            header: 'Project',
+            sortable: true,
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
+        {
+            key: 'source_name',
+            header: 'Source',
+            sortable: true,
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
+        {
+            key: 'location_name',
+            header: 'Location',
+            sortable: true,
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
+        {
+            key: 'record_owner_name',
+            header: 'Record Owner',
+            sortable: true,
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
         {
             key: 'record_name',
             header: 'Book Name',
@@ -288,7 +308,12 @@ const BatchAllocation = () => {
                 </TooltipProvider>
             )
         },
-        { key: 'record_type_name', header: 'Record Type', sortable: true },
+        {
+            key: 'record_type_name',
+            header: 'Record Type',
+            sortable: true,
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
         { key: 'total_count', header: 'Total Images', sortable: true },
         { key: 'upload_count', header: 'Uploaded', sortable: true },
         {

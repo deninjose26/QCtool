@@ -712,16 +712,17 @@ const QCPanel: React.FC = () => {
                         </div>
                       )}
 
+                      {/* Status Watermarks */}
                       {currentImage.qc_status === 'Approved' && (
                         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                          <div className="text-8xl font-black text-emerald-500/30 transform -rotate-12">
+                          <div className="text-8xl font-black text-emerald-500/20 transform -rotate-12">
                             ACCEPTED
                           </div>
                         </div>
                       )}
                       {currentImage.qc_status === 'Rejected' && (
                         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                          <div className="text-8xl font-black text-red-500/30 transform -rotate-12">
+                          <div className="text-8xl font-black text-red-500/20 transform -rotate-12">
                             REJECTED
                           </div>
                         </div>

@@ -12,7 +12,8 @@ import {
     ShieldCheck,
     Clock,
     Zap,
-    User
+    User,
+    Bell
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import PageHeader from '@/components/common/PageHeader';
@@ -98,7 +99,8 @@ const QCUserDashboard: React.FC = () => {
     const actionCards = [
         { title: 'My Worklist', desc: 'Active QC assignments', icon: ListChecks, link: '/tasks', color: 'text-indigo-700', bg: 'bg-indigo-100', cardBg: 'bg-indigo-50/30', ring: 'ring-indigo-200/50' },
         { title: 'My History', desc: 'Past quality audits', icon: History, link: '/qc-history', color: 'text-violet-700', bg: 'bg-violet-100', cardBg: 'bg-violet-50/30', ring: 'ring-violet-200/50' },
-        { title: 'My Profile', desc: 'View & manage your details', icon: User, link: '/profile', color: 'text-emerald-700', bg: 'bg-emerald-100', cardBg: 'bg-emerald-50/30', ring: 'ring-emerald-200/50' }
+        { title: 'My Profile', desc: 'View & manage your details', icon: User, link: '/profile', color: 'text-emerald-700', bg: 'bg-emerald-100', cardBg: 'bg-emerald-50/30', ring: 'ring-emerald-200/50' },
+        { title: 'Notifications', desc: 'System alerts & updates', icon: Bell, link: '/notifications', color: 'text-amber-700', bg: 'bg-amber-100', cardBg: 'bg-amber-50/30', ring: 'ring-amber-200/50' }
     ];
 
     if (isLoading) {
@@ -122,7 +124,7 @@ const QCUserDashboard: React.FC = () => {
             />
 
             {/* Top Quick Actions */}
-            <div className="grid gap-6 md:grid-cols-3">
+            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
                 {actionCards.map((card, idx) => (
                     <Link key={idx} to={card.link} className="block group">
                         <Card className={cn(
@@ -130,10 +132,10 @@ const QCUserDashboard: React.FC = () => {
                             card.cardBg,
                             card.ring
                         )}>
-                            <CardContent className="p-7">
+                            <CardContent className="p-5">
                                 <div className="flex items-center justify-between mb-4">
-                                    <div className={cn("p-4 rounded-2xl transition-all duration-300 group-hover:scale-110 shadow-sm", card.bg)}>
-                                        <card.icon className={cn("h-6 w-6", card.color)} />
+                                    <div className={cn("p-3 rounded-xl transition-all duration-300 group-hover:scale-110 shadow-sm", card.bg)}>
+                                        <card.icon className={cn("h-5 w-5", card.color)} />
                                     </div>
                                     <div className="h-8 w-8 rounded-full bg-white/50 backdrop-blur-sm border border-white flex items-center justify-center group-hover:bg-white transition-colors">
                                         <ArrowRight className="h-4 w-4 text-slate-400 group-hover:text-slate-600 group-hover:translate-x-0.5 transition-all" />
@@ -162,13 +164,13 @@ const QCUserDashboard: React.FC = () => {
                         stat.cardBg,
                         stat.ring
                     )}>
-                        <CardContent className="p-6 flex items-center gap-5">
-                            <div className={cn("h-14 w-14 rounded-2xl flex items-center justify-center flex-shrink-0 transition-all duration-300 group-hover:scale-110 shadow-sm bg-white")}>
-                                <stat.icon className={cn("h-7 w-7", stat.color)} />
+                        <CardContent className="p-4 flex items-center gap-4">
+                            <div className={cn("h-11 w-11 rounded-xl flex items-center justify-center flex-shrink-0 transition-all duration-300 group-hover:scale-110 shadow-sm bg-white")}>
+                                <stat.icon className={cn("h-5 w-5", stat.color)} />
                             </div>
                             <div>
                                 <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest leading-none mb-1.5">{stat.label}</p>
-                                <p className="text-2xl font-black text-slate-900 tracking-tight">{stat.val}</p>
+                                <p className="text-xl font-black text-slate-900 tracking-tight">{stat.val}</p>
                             </div>
                         </CardContent>
                     </Card>
@@ -182,13 +184,13 @@ const QCUserDashboard: React.FC = () => {
                     <div className="absolute top-0 right-0 p-8 opacity-5 group-hover:opacity-10 transition-opacity">
                         <Activity className="h-32 w-32 text-indigo-200" />
                     </div>
-                    <CardContent className="p-8 relative z-10 flex flex-col justify-between h-full min-h-[340px]">
+                    <CardContent className="p-6 relative z-10 flex flex-col justify-between h-full min-h-[300px]">
                         <div>
-                            <h3 className="text-[10px] font-black text-indigo-500 uppercase tracking-[0.2em] mb-6">Current Focus</h3>
+                            <h3 className="text-[10px] font-black text-indigo-500 uppercase tracking-[0.2em] mb-4">Current Focus</h3>
                             {activeTask ? (
                                 <div className="space-y-8">
                                     <div>
-                                        <h4 className="text-2xl font-black mb-1 truncate tracking-tighter text-slate-900">{activeTask.batch_id}</h4>
+                                        <h4 className="text-lg font-black mb-1 break-all tracking-tight text-slate-900 leading-tight">{activeTask.batch_id}</h4>
                                         <div className="flex items-center gap-2">
                                             <Badge variant="outline" className="border-slate-100 text-slate-400 text-[8px] font-black px-1.5 h-4">PROJECT</Badge>
                                             <p className="text-[10px] font-bold text-slate-500 uppercase tracking-tight">{activeTask.project_name}</p>
@@ -229,7 +231,7 @@ const QCUserDashboard: React.FC = () => {
 
                         {activeTask && (
                             <Link to={`/qc/${activeTask.batch_uid}`} className="mt-8">
-                                <Button className="w-full bg-indigo-600 text-white hover:bg-indigo-700 font-black h-14 rounded-2xl transition-all active:scale-95 shadow-xl shadow-indigo-600/20 border-none group">
+                                <Button className="w-full bg-indigo-600 text-white hover:bg-indigo-700 font-black h-12 rounded-xl transition-all active:scale-95 shadow-xl shadow-indigo-600/20 border-none group">
                                     RESUME WORK
                                     <ArrowRight className="ml-2 h-4 w-4 group-hover:translate-x-1 transition-transform" />
                                 </Button>
@@ -241,8 +243,8 @@ const QCUserDashboard: React.FC = () => {
 
                 {/* Quality Metrics Index */}
                 <Card className="lg:col-span-2 border-none shadow-md shadow-slate-200/50 ring-1 ring-slate-200/60 overflow-hidden bg-white">
-                    <CardContent className="p-8">
-                        <div className="flex items-center justify-between mb-10">
+                    <CardContent className="p-6">
+                        <div className="flex items-center justify-between mb-6">
                             <div>
                                 <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Quality Metrics Index</h3>
                                 <p className="text-xl font-black text-slate-800 mt-1 uppercase tracking-tighter">Verification Outcomes</p>
@@ -255,31 +257,31 @@ const QCUserDashboard: React.FC = () => {
                         </div>
 
                         <div className="grid md:grid-cols-2 gap-8">
-                            <div className="group relative p-8 bg-slate-50/50 rounded-[2.5rem] border border-slate-100 hover:bg-emerald-50/30 hover:border-emerald-100 transition-all duration-300">
+                            <div className="group relative p-6 bg-slate-50/50 rounded-3xl border border-slate-100 hover:bg-emerald-50/30 hover:border-emerald-100 transition-all duration-300">
                                 <div className="flex items-center justify-between mb-6">
                                     <div className="h-14 w-14 rounded-2xl bg-emerald-100 flex items-center justify-center text-emerald-600 shadow-inner group-hover:scale-110 transition-transform">
                                         <TrendingUp className="h-7 w-7" />
                                     </div>
                                     <Badge className="bg-emerald-500/10 text-emerald-600 border-none font-black text-[9px] uppercase px-2 py-0.5">Approved</Badge>
                                 </div>
-                                <p className="text-5xl font-black text-slate-900 tracking-tighter">{stats.acceptedImages.toLocaleString()}</p>
+                                <p className="text-4xl font-black text-slate-900 tracking-tighter">{stats.acceptedImages.toLocaleString()}</p>
                                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-2">Compliance Confirmed</p>
-                                <div className="mt-6 pt-6 border-t border-slate-100 flex items-center justify-between">
+                                <div className="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between">
                                     <span className="text-[10px] font-bold text-slate-500 uppercase">Audit Rating</span>
                                     <span className="text-xs font-black text-emerald-600">PASSED</span>
                                 </div>
                             </div>
 
-                            <div className="group relative p-8 bg-slate-50/50 rounded-[2.5rem] border border-slate-100 hover:bg-rose-50/30 hover:border-rose-100 transition-all duration-300">
+                            <div className="group relative p-6 bg-slate-50/50 rounded-3xl border border-slate-100 hover:bg-rose-50/30 hover:border-rose-100 transition-all duration-300">
                                 <div className="flex items-center justify-between mb-6">
                                     <div className="h-14 w-14 rounded-2xl bg-rose-100 flex items-center justify-center text-rose-600 shadow-inner group-hover:scale-110 transition-transform">
                                         <History className="h-7 w-7" />
                                     </div>
                                     <Badge className="bg-rose-500/10 text-rose-600 border-none font-black text-[9px] uppercase px-2 py-0.5">Rejected</Badge>
                                 </div>
-                                <p className="text-5xl font-black text-slate-900 tracking-tighter">{stats.rejectedImages.toLocaleString()}</p>
+                                <p className="text-4xl font-black text-slate-900 tracking-tighter">{stats.rejectedImages.toLocaleString()}</p>
                                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-2">Corrections Required</p>
-                                <div className="mt-6 pt-6 border-t border-slate-100 flex items-center justify-between">
+                                <div className="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between">
                                     <span className="text-[10px] font-bold text-slate-500 uppercase">Exception Rate</span>
                                     <span className="text-xs font-black text-rose-600">{stats.doneImages > 0 ? ((stats.rejectedImages / stats.doneImages) * 100).toFixed(1) : 0}%</span>
                                 </div>
@@ -309,13 +311,13 @@ const QCUserDashboard: React.FC = () => {
                     <div className="divide-y divide-slate-50">
                         {recentHistory.length > 0 ? (
                             recentHistory.map((item, idx) => (
-                                <div key={idx} className="px-8 py-6 flex items-center justify-between hover:bg-slate-50/50 transition-all duration-300">
+                                <div key={idx} className="px-6 py-4 flex items-center justify-between hover:bg-slate-50/50 transition-all duration-300">
                                     <div className="flex items-center gap-6 min-w-0">
-                                        <div className="h-14 w-14 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-500 shadow-sm flex-shrink-0">
-                                            <CheckCircle2 className="h-7 w-7" />
+                                        <div className="h-12 w-12 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-500 shadow-sm flex-shrink-0">
+                                            <CheckCircle2 className="h-6 w-6" />
                                         </div>
                                         <div className="min-w-0">
-                                            <h4 className="text-sm font-black text-slate-800 tracking-tight truncate uppercase">{item.batch_id}</h4>
+                                            <h4 className="text-sm font-black text-slate-800 tracking-tight break-all uppercase leading-tight">{item.batch_id}</h4>
                                             <div className="flex items-center gap-3 mt-1.5">
                                                 <Badge variant="outline" className="h-4 px-1.5 text-[8px] font-black tracking-widest text-slate-400 border-slate-200">VERIFIED</Badge>
                                                 <p className="text-[10px] text-slate-400 font-bold uppercase">{item.project_name} • {formatToLocalTime(item.qc_completed_date)}</p>
@@ -325,13 +327,13 @@ const QCUserDashboard: React.FC = () => {
                                     <div className="flex items-center gap-12">
                                         <div className="text-right hidden sm:block">
                                             <p className="text-[9px] font-black text-slate-400 uppercase mb-1 tracking-widest leading-none">Accepted</p>
-                                            <p className="text-lg font-black text-emerald-600 tracking-tighter leading-none">{item.accepted_count}</p>
+                                            <p className="text-base font-black text-emerald-600 tracking-tighter leading-none">{item.accepted_count}</p>
                                         </div>
                                         <div className="text-right hidden sm:block">
                                             <p className="text-[9px] font-black text-slate-400 uppercase mb-1 tracking-widest leading-none">Rejected</p>
-                                            <p className="text-lg font-black text-rose-600 tracking-tighter leading-none">{item.rejected_count}</p>
+                                            <p className="text-base font-black text-rose-600 tracking-tighter leading-none">{item.rejected_count}</p>
                                         </div>
-                                        <div className="h-10 w-10 rounded-full border border-slate-100 flex items-center justify-center text-slate-300 group hover:bg-slate-50 transition-colors">
+                                        <div className="h-8 w-8 rounded-full border border-slate-100 flex items-center justify-center text-slate-300 group hover:bg-slate-50 transition-colors">
                                             <ArrowRight className="h-4 w-4" />
                                         </div>
                                     </div>

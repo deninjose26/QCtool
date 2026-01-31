@@ -230,8 +230,12 @@ const RecordOwners: React.FC = () => {
                                 <SelectContent>{locations.filter(l => l.sourceId === formData.sourceId).map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
                             </Select>
                         </div>
-                        <div className="space-y-2"><Label>Code</Label><Input value={editingOwner ? formData.code : 'Auto-generated (e.g., R0001)'} disabled className="bg-muted" /></div>
-                        <div className="space-y-2"><Label>Name</Label><Input value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="e.g., Department of Treasury" /></div>
+
+                        <div className="space-y-2">
+                            <Label>Name</Label>
+                            <Input value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="e.g., Manoj Sharma" />
+                            <p className="text-[10px] text-muted-foreground italic">Enter the name of the person or organization who owns the records.</p>
+                        </div>
                     </div>
                     <DialogFooter><Button onClick={handleSubmit}>{editingOwner ? 'Update' : 'Create'}</Button></DialogFooter>
                 </DialogContent>

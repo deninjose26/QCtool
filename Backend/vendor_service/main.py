@@ -451,25 +451,31 @@ def get_vendor_batch_images(
     # Fetch images. For re-upload batches, we show:
     # - Images already uploaded to the current rework batch
     # - ONLY rejected images from the parent batch (to show what needs fixing)
-    if parent_uid:
-        statement = select(Image, QC).outerjoin(
-            QC, Image.image_id == QC.image_id
-        ).where(
-            or_(
-                Image.batch_uid == batch_uid,
-                and_(Image.batch_uid == parent_uid, QC.qc_status == QCStatus.Rejected)
-            )
-        ).where(Image.conversion_status == ConversionStatus.Jpeg_Converted)\
-         .order_by(Image.image_name)
-    else:
-        statement = select(Image, QC).outerjoin(
-            QC, Image.image_id == QC.image_id
-        ).where(Image.batch_uid == batch_uid)\
-         .where(Image.conversion_status == ConversionStatus.Jpeg_Converted)\
-         .order_by(Image.image_name)
-
-    results = session.exec(statement).all()
+    images_dict = {}
     
+    # 1. Fetch images from current batch
+    current_statement = select(Image, QC).outerjoin(
+        QC, Image.image_id == QC.image_id
+    ).where(Image.batch_uid == batch_uid)\
+     .where(Image.conversion_status == ConversionStatus.Jpeg_Converted)
+    
+    current_results = session.exec(current_statement).all()
+    for img, qc_rec in current_results:
+        images_dict[img.image_name] = (img, qc_rec, "current")
+
+    # 2. If re-upload, fetch rejected images from parent batch that aren't re-uploaded yet
+    if parent_uid:
+        parent_statement = select(Image, QC).outerjoin(
+            QC, Image.image_id == QC.image_id
+        ).where(Image.batch_uid == parent_uid)\
+         .where(QC.qc_status == QCStatus.Rejected)\
+         .where(Image.conversion_status == ConversionStatus.Jpeg_Converted)
+        
+        parent_results = session.exec(parent_statement).all()
+        for img, qc_rec in parent_results:
+            if img.image_name not in images_dict:
+                images_dict[img.image_name] = (img, qc_rec, "parent")
+
     # Generate presigned URLs
     s3_client = boto3.client(
         's3',
@@ -483,7 +489,12 @@ def get_vendor_batch_images(
     output = []
     qc_bucket_name = os.getenv('QC_S3_BUCKET_NAME')
     
-    for img, qc_rec in results:
+    # Sort by image name for consistent output
+    sorted_image_names = sorted(images_dict.keys())
+    
+    for name in sorted_image_names:
+        img, qc_rec, source_type = images_dict[name]
+        
         # Use JPEG (QC Bucket) exclusively
         if not img.qc_s3_path:
             continue
@@ -500,12 +511,22 @@ def get_vendor_batch_images(
         except Exception:
             url = None
             
+        status = "Pending"
+        if qc_rec:
+            status = qc_rec.qc_status
+        elif source_type == "parent":
+            # This shouldn't be reached due to where(QC.qc_status == Rejected) above, but for safety:
+            status = "Rejected"
+        else:
+            # New upload in current batch, no QC record yet
+            status = "Pending"
+
         output.append({
             "image_id": str(img.image_id),
             "image_name": img.image_name,
             "url": url,
             "is_converted": True,
-            "status": qc_rec.qc_status if qc_rec else "Approved"
+            "status": status
         })
         
     return output

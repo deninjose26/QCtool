@@ -100,7 +100,16 @@ const OperatorAllocation: React.FC = () => {
 
             // 3. Fetch vendor's operators
             const allUsers = await apiFetch(`${API_BASE_URL}/admin/users`).then(r => r.json());
-            setOperators(allUsers.filter((u: any) => u.user_role === 'Scanning_Operator' && u.created_by === currentUser?.id));
+            const mappedUsers = allUsers.map((u: any) => ({
+                ...u,
+                id: u.user_id, // Map backend user_id to frontend id
+                role: u.user_role
+            }));
+
+            setOperators(mappedUsers.filter((u: any) =>
+                u.user_role === 'Scanning_Operator' &&
+                u.created_by === currentUser?.id
+            ));
 
         } catch (error) {
             toast({ title: 'Error', description: 'Failed to synchronize data', variant: 'destructive' });

@@ -6,7 +6,7 @@ import { getNavItems, roleLabels } from '@/lib/role-config';
 import {
   Shield, Circle, LayoutDashboard, FolderKanban, Database, MapPin,
   Building2, FileText, Users, Upload, CheckCircle, Briefcase, GitBranch,
-  UserCog, History, Image, RefreshCw, PlusCircle, ClipboardList
+  UserCog, History, Image, RefreshCw, PlusCircle, ClipboardList, ShieldCheck
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -42,6 +42,7 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   PlusCircle,
   ClipboardList,
   Shield,
+  ShieldCheck,
   Circle,
 };
 

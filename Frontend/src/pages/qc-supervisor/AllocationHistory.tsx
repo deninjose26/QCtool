@@ -208,7 +208,11 @@ const AllocationHistory: React.FC = () => {
                 </code>
             )
         },
-        { key: 'project_name', header: 'Project' },
+        {
+            key: 'project_name',
+            header: 'Project',
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
         {
             key: 'upload_type',
             header: 'Type',
@@ -226,7 +230,7 @@ const AllocationHistory: React.FC = () => {
         {
             key: 'record_name',
             header: 'Book Name',
-            render: (val: string) => <span className="text-[11px] font-medium text-slate-700 max-w-[150px] truncate block">{val}</span>
+            render: (val: string) => <span className="text-[11px] font-medium text-slate-700 max-w-[150px] truncate block" title={val}>{val}</span>
         },
         {
             key: 'qc_user_name',

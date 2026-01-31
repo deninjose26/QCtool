@@ -151,9 +151,27 @@ export class UploadManager {
         onProgress?: (progress: UploadProgress) => void
     ): Promise<void> {
         try {
+            // Check if network is available
+            if (!navigator.onLine) {
+                throw new Error('Network offline');
+            }
+
             // Check if paused
             if (this.isPaused) {
                 throw new Error('Upload paused');
+            }
+
+            // CRITICAL: Validate file blob exists and has content
+            if (!file.file_blob) {
+                throw new Error(`File blob missing for ${file.file_name}`);
+            }
+
+            if (file.file_blob.size === 0) {
+                throw new Error(`File blob is empty (0 bytes) for ${file.file_name}`);
+            }
+
+            if (file.file_blob.size !== file.file_size) {
+                console.warn(`File size mismatch: blob=${file.file_blob.size}, metadata=${file.file_size}`);
             }
 
             // Update status to uploading
@@ -233,23 +251,33 @@ export class UploadManager {
      */
     async processUploadQueue(
         batch_uid: string,
-        files: QueuedFile[],
+        fileIds: number[],
         onFileProgress?: (progress: UploadProgress) => void,
         onBatchProgress?: (progress: BatchProgress) => void,
         onComplete?: () => void,
         onError?: (error: Error) => void,
-        concurrency: number = 5 // User requested chunks, 5-10 is safest for TIFF
+        concurrency: number = 5,
+        filesArray?: File[] // Optional: direct file array for instant access
     ): Promise<void> {
         let completedCount = 0;
-        const total = files.length;
+        let processedCount = 0;
+        const total = fileIds.length;
         let activeUploads = 0;
         let currentIndex = 0;
         let hasErrorOccurred = false;
 
         return new Promise((resolve, reject) => {
             const startNext = async () => {
-                // Check if all files are done
-                if (completedCount === total) {
+                // Physical Network Kill-Switch
+                if (!navigator.onLine) {
+                    console.warn('📡 Network offline detected. Stopping upload loop.');
+                    this.isPaused = true;
+                    if (onError) onError(new Error('Network offline'));
+                    return;
+                }
+
+                // Check if all files are processed
+                if (processedCount === total) {
                     if (onComplete) onComplete();
                     resolve();
                     return;
@@ -260,9 +288,82 @@ export class UploadManager {
 
                 // Fill workers up to concurrency limit
                 while (activeUploads < concurrency && currentIndex < total) {
-                    const file = files[currentIndex];
+                    const fileId = fileIds[currentIndex];
                     currentIndex++;
                     activeUploads++;
+
+                    // Fetch file: either from memory array or IndexedDB
+                    let file: QueuedFile | undefined;
+
+                    // First, get metadata from IndexedDB
+                    const { db } = await import('./uploadDB');
+                    const metadata = await db.upload_queue.get(fileId);
+
+                    if (!metadata) {
+                        activeUploads--;
+                        processedCount++;
+                        startNext();
+                        continue;
+                    }
+
+                    if (filesArray && filesArray.length > 0) {
+                        // Use direct file access (INSTANT) - MATCH BY FILENAME
+                        const rawFile = filesArray.find(f => f.name === metadata.file_name);
+
+                        if (rawFile) {
+                            file = {
+                                ...metadata,
+                                file_blob: rawFile // Attach the actual file
+                            };
+                        } else {
+                            // File not found in array - fallback to error
+                            console.error(`File not found in array: ${metadata.file_name}`);
+                            activeUploads--;
+                            processedCount++;
+                            startNext();
+                            continue;
+                        }
+                    } else {
+                        // FALLBACK: Files array lost (tab switch) - try to restore from directory handle
+                        console.warn('⚠️ Files array not available - attempting to restore from directory handle');
+
+                        // Get the directory handle from batch queue
+                        const batchInfo = await db.batch_queue.get(batch_uid);
+
+                        if (batchInfo?.directory_handle) {
+                            try {
+                                // Get the file from directory
+                                const fileHandle = await (batchInfo.directory_handle as any).getFileHandle(metadata.file_name);
+                                const rawFile = await fileHandle.getFile();
+
+                                file = {
+                                    ...metadata,
+                                    file_blob: rawFile
+                                };
+
+                                console.log(`✅ Restored file from directory: ${metadata.file_name}`);
+                            } catch (err) {
+                                console.error(`❌ Failed to restore file: ${metadata.file_name}`, err);
+                                activeUploads--;
+                                processedCount++;
+                                startNext();
+                                continue;
+                            }
+                        } else {
+                            console.error('❌ No directory handle available');
+                            activeUploads--;
+                            processedCount++;
+                            startNext();
+                            continue;
+                        }
+                    }
+
+                    if (!file) {
+                        activeUploads--;
+                        processedCount++;
+                        startNext();
+                        continue;
+                    }
 
                     // Mark as uploading in UI
                     if (onBatchProgress) {
@@ -270,7 +371,7 @@ export class UploadManager {
                             completed: completedCount,
                             total,
                             percentage: Math.round((completedCount / total) * 100),
-                            currentFile: `Uploading multiple files (${activeUploads} active)...`
+                            currentFile: `Uploading ${file.file_name}...`
                         });
                     }
 
@@ -278,13 +379,14 @@ export class UploadManager {
                     this.uploadSingleFile(batch_uid, file, onFileProgress)
                         .then(() => {
                             activeUploads--;
-                            completedCount++;
+                            completedCount++; // High-Water Mark: Only increment on 200 OK
+                            processedCount++;
                             startNext(); // Pull next file
                         })
                         .catch((err) => {
                             console.error(`Error uploading ${file.file_name}:`, err);
                             activeUploads--;
-                            completedCount++; // Count as processed to avoid hanging
+                            processedCount++;
                             if (onError) onError(err);
                             startNext();
                         });

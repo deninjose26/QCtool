@@ -179,12 +179,36 @@ const OperatorQCHistory: React.FC = () => {
             sortable: true,
             render: (val: string) => <code className="text-[10px] font-bold text-indigo-600 tracking-tighter">{val}</code>
         },
-        { key: 'project_name', header: 'Project' },
-        { key: 'source_name', header: 'Source' },
-        { key: 'location_name', header: 'Location' },
-        { key: 'record_owner_name', header: 'Owner' },
-        { key: 'record_type_name', header: 'Type' },
-        { key: 'book_name', header: 'Book Name' },
+        {
+            key: 'project_name',
+            header: 'Project',
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
+        {
+            key: 'source_name',
+            header: 'Source',
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
+        {
+            key: 'location_name',
+            header: 'Location',
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
+        {
+            key: 'record_owner_name',
+            header: 'Owner',
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
+        {
+            key: 'record_type_name',
+            header: 'Type',
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
+        {
+            key: 'book_name',
+            header: 'Book Name',
+            render: (val: string) => <span className="text-[10px] font-black text-slate-700 max-w-[150px] truncate block" title={val}>{val}</span>
+        },
         {
             key: 'total_count',
             header: 'Images',

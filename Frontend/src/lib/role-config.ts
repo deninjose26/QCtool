@@ -26,6 +26,7 @@ export const getNavItems = (role: UserRole): NavItem[] => {
         { title: 'User Management', href: '/users', icon: 'Users' },
         { title: 'Upload History', href: '/upload-history', icon: 'Upload' },
         { title: 'QC History', href: '/qc-history', icon: 'CheckCircle' },
+        { title: 'Accepted Batches', href: '/accepted-batches', icon: 'ShieldCheck' },
       ];
 
     case 'Upload_Supervisor':
@@ -39,6 +40,7 @@ export const getNavItems = (role: UserRole): NavItem[] => {
         { title: 'Vendor Allocation', href: '/vendor-allocation', icon: 'GitBranch' },
         { title: 'Upload History', href: '/upload-history', icon: 'Upload' },
         { title: 'QC History', href: '/qc-history', icon: 'CheckCircle' },
+        { title: 'Accepted Batches', href: '/accepted-batches', icon: 'ShieldCheck' },
         { title: 'Image Preview', href: '/supervisor/image-preview', icon: 'Image' },
       ];
 
@@ -72,6 +74,7 @@ export const getNavItems = (role: UserRole): NavItem[] => {
         { title: 'Allocation History', href: '/allocation-history', icon: 'ClipboardList' },
         { title: 'QC Review', href: '/qc-review-queue', icon: 'CheckCircle' },
         { title: 'QC Master History', href: '/qc-history', icon: 'History' },
+        { title: 'Accepted Batches', href: '/accepted-batches', icon: 'ShieldCheck' },
       ];
 
     case 'QC_User':

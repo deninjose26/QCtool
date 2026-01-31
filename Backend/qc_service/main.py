@@ -448,7 +448,7 @@ def export_batch_details(
     
     if current_user.user_role == UserRole.QC_User:
         statement = statement.where(QCAllocation.allocated_to_qc_user == current_user.user_id)
-    elif current_user.user_role not in [UserRole.QC_Supervisor, UserRole.SuperAdmin]:
+    elif current_user.user_role not in [UserRole.QC_Supervisor, UserRole.SuperAdmin, UserRole.Upload_Supervisor]:
         raise HTTPException(status_code=403, detail="Access denied")
 
     allocation = session.exec(statement).first()
@@ -456,18 +456,42 @@ def export_batch_details(
     if not allocation:
         raise HTTPException(status_code=404, detail="Batch not found or not authorized")
     
-    # Get all images and their QC records
+    # Lineage awareness: if this is a rework batch, we should include images from parent versions
+    all_allocation_ids = [allocation.qc_allocation_id]
+    curr_batch = session.get(Batch, batch_uid)
+    
+    if curr_batch and curr_batch.is_reupload:
+        curr_parent_uid = curr_batch.parent_batch_uid
+        visited = {batch_uid}
+        while curr_parent_uid and curr_parent_uid not in visited:
+            p_batch = session.get(Batch, curr_parent_uid)
+            if not p_batch: break
+            
+            p_qca = session.exec(select(QCAllocation).where(QCAllocation.batch_uid == p_batch.batch_uid)).first()
+            if p_qca:
+                all_allocation_ids.append(p_qca.qc_allocation_id)
+            
+            visited.add(curr_parent_uid)
+            curr_parent_uid = p_batch.parent_batch_uid
+
+    # Get all images and their QC records for the entire lineage
+    # We order by date desc so if an image was rejected then fixed, we can potentially filter (though for accepted batches they should all be good)
     statement = (
         select(QC, Image)
         .join(Image, QC.image_id == Image.image_id)
-        .where(QC.qc_allocation_id == allocation.qc_allocation_id)
-        .order_by(Image.image_name)
+        .where(QC.qc_allocation_id.in_(all_allocation_ids))
+        .order_by(Image.image_name, QC.qc_date.desc())
     )
     
     results = session.exec(statement).all()
     
     export_data = []
+    seen_images = set() # Ensure we don't duplicate if image names are same across versions
+    
     for qc, img in results:
+        if img.image_name in seen_images:
+            continue
+        
         export_data.append({
             "image_name": img.image_name,
             "qc_status": qc.qc_status,
@@ -475,5 +499,9 @@ def export_batch_details(
             "remarks": qc.remarks or "",
             "qc_date": qc.qc_date.strftime("%Y-%m-%d %H:%M:%S") if qc.qc_date else ""
         })
+        seen_images.add(img.image_name)
+    
+    # Optional: Sort back to name order for the final list
+    export_data.sort(key=lambda x: x['image_name'])
     
     return export_data

@@ -79,13 +79,14 @@ export class ChunkedUploadManager {
                 // Store this chunk in IndexedDB
                 await storeFilesInQueue(batch_uid, chunk);
 
-                // Get pending files for this chunk
+                // Get pending files for this chunk and extract IDs (RAM SAVER)
                 const pendingFiles = await getPendingFiles(batch_uid);
+                const fileIds = pendingFiles.map(f => f.id).filter((id): id is number => id !== undefined);
 
                 // Upload this chunk
                 await this.uploadManager.processUploadQueue(
                     batch_uid,
-                    pendingFiles,
+                    fileIds,
                     (fileProgress) => {
                         if (onFileProgress) {
                             onFileProgress(fileProgress.fileName, fileProgress.progress);

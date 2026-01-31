@@ -201,7 +201,11 @@ const QCUserHistory: React.FC = () => {
                 </code>
             )
         },
-        { key: 'project_name', header: 'Project' },
+        {
+            key: 'project_name',
+            header: 'Project',
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
         {
             key: 'upload_type',
             header: 'Type',
@@ -216,11 +220,31 @@ const QCUserHistory: React.FC = () => {
                 </Badge>
             )
         },
-        { key: 'source_name', header: 'Source' },
-        { key: 'location_name', header: 'Location' },
-        { key: 'record_owner_name', header: 'Record Owner' },
-        { key: 'record_type_name', header: 'Record Type' },
-        { key: 'book_name', header: 'Book Name' },
+        {
+            key: 'source_name',
+            header: 'Source',
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
+        {
+            key: 'location_name',
+            header: 'Location',
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
+        {
+            key: 'record_owner_name',
+            header: 'Record Owner',
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
+        {
+            key: 'record_type_name',
+            header: 'Record Type',
+            render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+        },
+        {
+            key: 'book_name',
+            header: 'Book Name',
+            render: (val: string) => <span className="text-[10px] font-black text-slate-700 max-w-[150px] truncate block" title={val}>{val}</span>
+        },
         { key: 'total_count', header: 'Total', sortable: true },
         {
             key: 'accepted_count',

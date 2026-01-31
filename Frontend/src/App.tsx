@@ -26,6 +26,7 @@ import RecordTypes from "./pages/admin/AdminRecordTypes";
 import Users from "./pages/admin/Users";
 import AdminUploadHistory from "./pages/admin/UploadHistory";
 import AdminQCHistory from "./pages/admin/QCHistory";
+import AcceptedBatches from "./pages/admin/AcceptedBatches";
 
 // Upload Supervisor Pages
 import Vendors from "@/pages/upload-supervisor/Vendors";
@@ -143,6 +144,10 @@ const AppRoutes = () => {
             user?.role === 'QC_Supervisor' ? <QCSupervisorHistory /> :
               user?.role === 'Vendor' ? <VendorQCHistory /> :
                 user?.role === 'Scanning_Operator' ? <OperatorQCHistory /> : <QCUserHistory />
+        } />
+
+        <Route path="/accepted-batches" element={
+          (user?.role === 'SuperAdmin' || user?.role === 'Upload_Supervisor' || user?.role === 'QC_Supervisor') ? <AcceptedBatches /> : <Dashboard />
         } />
 
         <Route path="/vendor/image-preview/:batchUid?" element={<VendorImagePreview />} />

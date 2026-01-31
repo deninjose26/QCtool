@@ -379,12 +379,11 @@ const ReworkBatches: React.FC = () => {
                         <UserCog className="h-4 w-4" />
                     </Button>
                     <Button
-                        variant="ghost"
+                        variant="outline"
                         size="icon"
-                        disabled={item.status !== 'uploaded'}
-                        onClick={() => navigate(`/vendor/image-preview/${item.batch_uid}`)}
-                        className="h-8 w-8 hover:text-indigo-600"
-                        title="Preview fixed images"
+                        onClick={() => navigate(`/image-preview/${item.batch_uid}`)}
+                        className="h-8 w-8 border-slate-200 text-slate-500 hover:text-indigo-600 hover:border-indigo-200 transition-all shadow-sm"
+                        title="View Rejected Images"
                     >
                         <Eye className="h-4 w-4" />
                     </Button>

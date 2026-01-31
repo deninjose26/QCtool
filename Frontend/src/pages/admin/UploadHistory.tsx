@@ -54,6 +54,9 @@ interface AdminBatch {
     operator_name: string;
     upload_type: string;
     status: 'pending' | 'uploading' | 'uploaded';
+    parent_batch_uid?: string;
+    replaced_by_batch_uid?: string;
+    status_detail?: string;
     upload_end_date?: string;
 }
 
@@ -275,12 +278,42 @@ const AdminUploadHistory: React.FC = () => {
                     </div>
                 )
             },
-            { key: 'project_name', header: 'Project', sortable: true },
-            { key: 'source_name', header: 'Source', sortable: true },
-            { key: 'location_name', header: 'Location', sortable: true },
-            { key: 'record_owner_name', header: 'Owner', sortable: true },
-            { key: 'record_type_name', header: 'Type', sortable: true },
-            { key: 'book_name', header: 'Book', sortable: true },
+            {
+                key: 'project_name',
+                header: 'Project',
+                sortable: true,
+                render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+            },
+            {
+                key: 'source_name',
+                header: 'Source',
+                sortable: true,
+                render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+            },
+            {
+                key: 'location_name',
+                header: 'Location',
+                sortable: true,
+                render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+            },
+            {
+                key: 'record_owner_name',
+                header: 'Owner',
+                sortable: true,
+                render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+            },
+            {
+                key: 'record_type_name',
+                header: 'Type',
+                sortable: true,
+                render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
+            },
+            {
+                key: 'book_name',
+                header: 'Book',
+                sortable: true,
+                render: (val: string) => <span className="text-[10px] font-bold text-slate-700 max-w-[120px] truncate block" title={val}>{val}</span>
+            },
             {
                 key: 'vendor_name',
                 header: 'Vendor',
@@ -292,15 +325,26 @@ const AdminUploadHistory: React.FC = () => {
                 key: 'upload_type',
                 header: 'Upload Type',
                 sortable: true,
-                render: (val: string) => (
-                    <Badge className={cn(
-                        "text-[10px] font-bold uppercase",
-                        val === 'Complete' ? "bg-emerald-100 text-emerald-700 border-emerald-200" :
-                            val === 'Partial' ? "bg-blue-100 text-blue-700 border-blue-200" :
-                                "bg-amber-100 text-amber-700 border-amber-200"
-                    )}>
-                        {val}
-                    </Badge>
+                render: (val: string, item: AdminBatch) => (
+                    <div className="flex flex-col gap-1">
+                        <Badge className={cn(
+                            "text-[10px] font-bold uppercase w-fit",
+                            val === 'Complete' ? "bg-emerald-100 text-emerald-700 border-emerald-200" :
+                                val === 'Partial' ? "bg-blue-100 text-blue-700 border-blue-200" :
+                                    "bg-amber-100 text-amber-700 border-amber-200"
+                        )}>
+                            {val}
+                        </Badge>
+                        {item.status_detail && (
+                            <span className={cn(
+                                "text-[9px] font-black uppercase px-1 py-0.5 rounded",
+                                item.status_detail === 'Replaced by Rework' ? "text-slate-400 bg-slate-100 line-through decoration-slate-400" :
+                                    "text-indigo-600 bg-indigo-50"
+                            )}>
+                                {item.status_detail}
+                            </span>
+                        )}
+                    </div>
                 )
             },
             {

@@ -172,6 +172,9 @@ class QCHistoryRead(BaseModel):
     qc_completed_date: Optional[datetime] = None
     qc_batch_status: QCBatchStatus
     upload_type: str
+    parent_batch_uid: Optional[UUID] = None
+    replaced_by_batch_uid: Optional[UUID] = None
+    status_detail: Optional[str] = None
 
 class QCAllocationCreate(BaseModel):
     batch_uid: UUID
@@ -469,7 +472,10 @@ def get_all_qc_history(
             allocation_date=qca.allocation_date,
             qc_completed_date=qca.qc_completed_date,
             qc_batch_status=qca.qc_batch_status,
-            upload_type=up_type
+            upload_type=up_type,
+            parent_batch_uid=batch.parent_batch_uid,
+            replaced_by_batch_uid=session.exec(select(Batch.batch_uid).where(Batch.parent_batch_uid == batch.batch_uid)).first(),
+            status_detail="Replaced by Rework" if session.exec(select(Batch.batch_uid).where(Batch.parent_batch_uid == batch.batch_uid)).first() else "Rework Batch" if batch.is_reupload else None
         ))
     
     return history
@@ -571,7 +577,10 @@ def get_allocation_history(
             allocation_date=qca.allocation_date,
             qc_completed_date=qca.qc_completed_date,
             qc_batch_status=qca.qc_batch_status,
-            upload_type=up_type
+            upload_type=up_type,
+            parent_batch_uid=batch.parent_batch_uid,
+            replaced_by_batch_uid=session.exec(select(Batch.batch_uid).where(Batch.parent_batch_uid == batch.batch_uid)).first(),
+            status_detail="Replaced by Rework" if session.exec(select(Batch.batch_uid).where(Batch.parent_batch_uid == batch.batch_uid)).first() else "Rework Batch" if batch.is_reupload else None
         ))
     
     return history
@@ -794,6 +803,7 @@ def verify_batch(
             is_complete=False,
             is_partial=original_batch.is_partial,
             is_reupload=True,
+            parent_batch_uid=original_batch.batch_uid, # Link to parent for traceability
             vendor_approved=False,
             created_date=get_ist_now(),
             last_updated=get_ist_now()

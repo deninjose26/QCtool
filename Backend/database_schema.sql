@@ -222,9 +222,10 @@ CREATE TABLE batch (
     is_complete BOOLEAN DEFAULT FALSE,
     is_partial BOOLEAN DEFAULT FALSE,
     is_reupload BOOLEAN DEFAULT FALSE,
+    parent_batch_uid UUID REFERENCES batch(batch_uid),
     vendor_approved BOOLEAN DEFAULT TRUE,
-    created_date TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'UTC'),
-    last_updated TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'UTC')
+    created_date TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'UTC' + INTERVAL '5 hours 30 minutes'),
+    last_updated TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'UTC' + INTERVAL '5 hours 30 minutes')
 );
 
 CREATE INDEX idx_batch_id ON batch(batch_id);

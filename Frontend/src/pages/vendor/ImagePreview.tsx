@@ -534,14 +534,14 @@ const VendorImagePreview: React.FC = () => {
                                 {/* Status Watermarks */}
                                 {currentImage.status?.toLowerCase() === 'rejected' && (
                                     <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
-                                        <div className="text-lg md:text-4xl font-black text-rose-600/25 transform -rotate-12 select-none uppercase tracking-tighter shadow-sm">
+                                        <div className="text-lg md:text-5xl font-black text-rose-600/20 transform -rotate-12 select-none uppercase tracking-tighter shadow-sm">
                                             REJECTED
                                         </div>
                                     </div>
                                 )}
                                 {currentImage.status?.toLowerCase() === 'approved' && (
                                     <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
-                                        <div className="text-lg md:text-4xl font-black text-emerald-600/20 transform -rotate-12 select-none uppercase tracking-tighter shadow-sm">
+                                        <div className="text-lg md:text-5xl font-black text-emerald-600/20 transform -rotate-12 select-none uppercase tracking-tighter shadow-sm">
                                             ACCEPTED
                                         </div>
                                     </div>

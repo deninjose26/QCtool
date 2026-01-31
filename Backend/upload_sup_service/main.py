@@ -241,18 +241,32 @@ def create_allocation(
     role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor]))
 ):
     # Check if this active combination is already allocated
-    existing = session.exec(
-        select(VendorAllocation).where(
-            VendorAllocation.project_id == alloc_data.project_id,
-            VendorAllocation.source_id == alloc_data.source_id,
-            VendorAllocation.location_id == alloc_data.location_id,
-            VendorAllocation.record_owner_id == alloc_data.record_owner_id,
-            VendorAllocation.is_active == True
-        )
+    # Provision: Admin can toggle if multiple vendors are allowed for same combination
+    from common.models import SystemSettings
+    allow_multiple = session.exec(
+        select(SystemSettings).where(SystemSettings.setting_id == "allow_multiple_vendor_allocations")
     ).first()
     
-    if existing:
-        raise HTTPException(status_code=400, detail="This combination is already active for a vendor.")
+    # Default is False (only 1 vendor)
+    should_restrict = True
+    if allow_multiple and allow_multiple.setting_value.lower() == "true":
+        should_restrict = False
+
+    if should_restrict:
+        # Check if already exists for ANOTHER vendor (same vendor re-allocation might be okay if it's inactive, 
+        # but here we check for ANY active one including self)
+        existing = session.exec(
+            select(VendorAllocation).where(
+                VendorAllocation.project_id == alloc_data.project_id,
+                VendorAllocation.source_id == alloc_data.source_id,
+                VendorAllocation.location_id == alloc_data.location_id,
+                VendorAllocation.record_owner_id == alloc_data.record_owner_id,
+                VendorAllocation.is_active == True
+            )
+        ).first()
+        
+        if existing:
+            raise HTTPException(status_code=400, detail="This combination is already active for a vendor.")
 
     db_alloc = VendorAllocation(
         project_id=alloc_data.project_id,

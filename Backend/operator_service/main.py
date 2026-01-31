@@ -31,6 +31,7 @@ class BatchCreate(BaseModel):
     upload_type: str # complete, partial, re-upload
     total_images: int
     uploading_count: int
+    parent_batch_uid: Optional[UUID] = None
 
 class BatchUpdate(BaseModel):
     book_name: Optional[str] = None
@@ -394,7 +395,8 @@ def create_batch(
         upload_count=data.uploading_count,    # Target for this Batch
         is_complete=(data.upload_type == "complete"),
         is_partial=(data.upload_type == "partial"),
-        is_reupload=(data.upload_type == "re-upload")
+        is_reupload=(data.upload_type == "re-upload"),
+        parent_batch_uid=data.parent_batch_uid
     )
 
     try:
@@ -410,6 +412,45 @@ def create_batch(
         "batch_id": new_batch.batch_id,
         "message": "Batch created successfully"
     }
+
+@router.get("/rejected-batches")
+def list_rejected_batches(
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """List batches that were rejected and need rework, to be selected by operator."""
+    if current_user.user_role != UserRole.Scanning_Operator:
+        raise HTTPException(status_code=403, detail="Only Operators can access this.")
+
+    # A batch is 'rejected' if it has a QCAllocation with status Verified_With_Rejection
+    # and it hasn't been 'Fixed' by a rework yet
+    statement = select(Batch, QCAllocation)\
+        .join(QCAllocation, Batch.batch_uid == QCAllocation.batch_uid)\
+        .join(ScanningOperatorAllocation, Batch.scanning_operator_allocation_id == ScanningOperatorAllocation.scanning_operator_allocation_id)\
+        .where(ScanningOperatorAllocation.allocated_to_operator == current_user.user_id)\
+        .where(QCAllocation.qc_batch_status == QCBatchStatus.Verified_With_Rejection)\
+        .order_by(Batch.created_date.desc())
+    
+    results = session.exec(statement).all()
+    
+    # Filter out batches that already have a child rework
+    output = []
+    for b, qca in results:
+        has_rework = session.exec(select(Batch).where(Batch.parent_batch_uid == b.batch_uid)).first()
+        if not has_rework:
+            output.append({
+                "batch_uid": b.batch_uid,
+                "batch_id": b.batch_id,
+                "book_name": session.get(RecordName, b.record_name_id).record_name,
+                "total_count": b.total_count,
+                "rejected_count": session.exec(
+                    select(func.count(QC.qc_id))
+                    .where(QC.qc_allocation_id == qca.qc_allocation_id)
+                    .where(QC.qc_status == QCStatus.Rejected)
+                ).first() or 0
+            })
+    
+    return output
 
 @router.get("/batches")
 def list_operator_batches(
@@ -772,6 +813,43 @@ def get_batch_hierarchy(
         base_folder=os.getenv('Base_folder', 'FamilyaConnect-QCTool')
     )
 
+@router.get("/batches/{batch_uid}/rejected-filenames")
+def get_rejected_filenames(
+    batch_uid: UUID,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Returns the list of filenames that were rejected in the parent batch and need fixing."""
+    batch = session.get(Batch, batch_uid)
+    if not batch or not batch.is_reupload:
+        return []
+        
+    parent_uid = batch.parent_batch_uid
+    if not parent_uid:
+        import re
+        match = re.search(r'R(\d+)$', batch.batch_id)
+        if match:
+            rework_num = int(match.group(1))
+            if rework_num > 1:
+                parent_batch_id = re.sub(r'R\d+$', f'R{rework_num-1}', batch.batch_id)
+            else:
+                parent_batch_id = re.sub(r'R\d+$', '', batch.batch_id)
+            parent_batch = session.exec(select(Batch).where(Batch.batch_id == parent_batch_id)).first()
+            if parent_batch:
+                parent_uid = parent_batch.batch_uid
+
+    if not parent_uid:
+        return []
+        
+    rejected_names = session.exec(
+        select(Image.image_name)
+        .join(QC, Image.image_id == QC.image_id)
+        .where(Image.batch_uid == parent_uid)
+        .where(QC.qc_status == QCStatus.Rejected)
+    ).all()
+    
+    return rejected_names
+
 @router.post("/batches/{batch_uid}/request-upload-url", response_model=PresignedUrlResponse)
 async def request_upload_url(
     batch_uid: UUID,
@@ -799,6 +877,44 @@ async def request_upload_url(
     allocation = session.get(ScanningOperatorAllocation, batch.scanning_operator_allocation_id)
     if not allocation or allocation.allocated_to_operator != current_user.user_id:
         raise HTTPException(status_code=403, detail="Not authorized")
+    
+    # 2. Re-upload Validation: Ensure file matches a rejected name from parent
+    if batch.is_reupload:
+        parent_uid = batch.parent_batch_uid
+        # Fallback lineage logic (same as used in image list)
+        if not parent_uid:
+            import re
+            match = re.search(r'R(\d+)$', batch.batch_id)
+            if match:
+                rework_num = int(match.group(1))
+                if rework_num > 1:
+                    parent_batch_id = re.sub(r'R\d+$', f'R{rework_num-1}', batch.batch_id)
+                else:
+                    parent_batch_id = re.sub(r'R\d+$', '', batch.batch_id)
+                
+                if parent_batch_id != batch.batch_id:
+                    parent_batch = session.exec(select(Batch).where(Batch.batch_id == parent_batch_id)).first()
+                    if parent_batch:
+                        parent_uid = parent_batch.batch_uid
+
+        if parent_uid:
+            # Fetch all rejected image names from parent batch
+            rejected_names = session.exec(
+                select(Image.image_name)
+                .join(QC, Image.image_id == QC.image_id)
+                .where(Image.batch_uid == parent_uid)
+                .where(QC.qc_status == QCStatus.Rejected)
+            ).all()
+            
+            # Check if uploaded file is in the rejected list
+            if request.file_name not in rejected_names:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Re-upload Validation Error: The file '{request.file_name}' does not match "
+                           f"any rejected image from the previous batch. In a rework batch, "
+                           f"you must upload files with the EXACT same names as those rejected. "
+                           f"Please check for extra/missing zeros (e.g., IMAGE000002.TIFF vs IMAGE00002.TIFF)."
+                )
     
     # Get hierarchy for path building
     hierarchy = get_batch_hierarchy(batch_uid, session, current_user)
@@ -907,6 +1023,44 @@ async def upload_complete(
     allocation = session.get(ScanningOperatorAllocation, batch.scanning_operator_allocation_id)
     if not allocation or allocation.allocated_to_operator != current_user.user_id:
         raise HTTPException(status_code=403, detail="Not authorized")
+    
+    # 2. Re-upload Validation: Ensure file matches a rejected name from parent
+    if batch.is_reupload:
+        parent_uid = batch.parent_batch_uid
+        # Fallback lineage logic (same as used in image list)
+        if not parent_uid:
+            import re
+            match = re.search(r'R(\d+)$', batch.batch_id)
+            if match:
+                rework_num = int(match.group(1))
+                if rework_num > 1:
+                    parent_batch_id = re.sub(r'R\d+$', f'R{rework_num-1}', batch.batch_id)
+                else:
+                    parent_batch_id = re.sub(r'R\d+$', '', batch.batch_id)
+                
+                if parent_batch_id != batch.batch_id:
+                    parent_batch = session.exec(select(Batch).where(Batch.batch_id == parent_batch_id)).first()
+                    if parent_batch:
+                        parent_uid = parent_batch.batch_uid
+
+        if parent_uid:
+            # Fetch all rejected image names from parent batch
+            rejected_names = session.exec(
+                select(Image.image_name)
+                .join(QC, Image.image_id == QC.image_id)
+                .where(Image.batch_uid == parent_uid)
+                .where(QC.qc_status == QCStatus.Rejected)
+            ).all()
+            
+            # Check if uploaded file is in the rejected list
+            if request.file_name not in rejected_names:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Re-upload Validation Error: The file '{request.file_name}' does not match "
+                           f"any rejected image from the previous batch. In a rework batch, "
+                           f"you must upload files with the EXACT same names as those rejected. "
+                           f"Please check for extra/missing zeros (e.g., IMAGE000002.TIFF vs IMAGE00002.TIFF)."
+                )
     
     # Check if image already exists
     existing = session.exec(
@@ -1053,25 +1207,31 @@ def get_batch_images(
     # 4. Fetch images. For re-upload batches, we show:
     # - Images already uploaded to the current rework batch
     # - ONLY rejected images from the parent batch (to show what needs fixing)
-    if parent_uid:
-        statement = select(Image, QC).outerjoin(
-            QC, Image.image_id == QC.image_id
-        ).where(
-            or_(
-                Image.batch_uid == batch_uid,
-                and_(Image.batch_uid == parent_uid, QC.qc_status == QCStatus.Rejected)
-            )
-        ).where(Image.conversion_status == ConversionStatus.Jpeg_Converted)\
-         .order_by(Image.image_name)
-    else:
-        statement = select(Image, QC).outerjoin(
-            QC, Image.image_id == QC.image_id
-        ).where(Image.batch_uid == batch_uid)\
-         .where(Image.conversion_status == ConversionStatus.Jpeg_Converted)\
-         .order_by(Image.image_name)
+    images_dict = {}
 
-    results = session.exec(statement).all()
+    # 1. Fetch images from current batch
+    current_statement = select(Image, QC).outerjoin(
+        QC, Image.image_id == QC.image_id
+    ).where(Image.batch_uid == batch_uid)\
+     .where(Image.conversion_status == ConversionStatus.Jpeg_Converted)
     
+    current_results = session.exec(current_statement).all()
+    for img, qc_rec in current_results:
+        images_dict[img.image_name] = (img, qc_rec, "current")
+
+    # 2. If re-upload, fetch rejected images from parent batch that aren't re-uploaded yet
+    if parent_uid:
+        parent_statement = select(Image, QC).outerjoin(
+            QC, Image.image_id == QC.image_id
+        ).where(Image.batch_uid == parent_uid)\
+         .where(QC.qc_status == QCStatus.Rejected)\
+         .where(Image.conversion_status == ConversionStatus.Jpeg_Converted)
+        
+        parent_results = session.exec(parent_statement).all()
+        for img, qc_rec in parent_results:
+            if img.image_name not in images_dict:
+                images_dict[img.image_name] = (img, qc_rec, "parent")
+
     # 5. Generate presigned URLs
     s3_client = boto3.client(
         's3',
@@ -1085,7 +1245,12 @@ def get_batch_images(
     output = []
     qc_bucket_name = os.getenv('QC_S3_BUCKET_NAME')
     
-    for img, qc_rec in results:
+    # Sort by image name for consistent output
+    sorted_image_names = sorted(images_dict.keys())
+    
+    for name in sorted_image_names:
+        img, qc_rec, source_type = images_dict[name]
+        
         # Use JPEG (QC Bucket) exclusively
         if not img.qc_s3_path:
             continue
@@ -1102,12 +1267,20 @@ def get_batch_images(
         except Exception:
             url = None
             
+        status = "Pending"
+        if qc_rec:
+            status = qc_rec.qc_status
+        elif source_type == "parent":
+            status = "Rejected"
+        else:
+            status = "Pending"
+
         output.append({
             "image_id": img.image_id,
             "image_name": img.image_name,
             "url": url,
             "is_converted": True,
-            "status": qc_rec.qc_status if qc_rec else "Approved"
+            "status": status
         })
         
     return output

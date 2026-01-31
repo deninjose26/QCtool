@@ -535,7 +535,7 @@ const OperatorImagePreview: React.FC = () => {
                                 {/* Status Watermarks */}
                                 {currentImage.status?.toLowerCase() === 'rejected' && (
                                     <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
-                                        <div className="text-2xl md:text-6xl font-black text-rose-600/25 transform -rotate-12 select-none uppercase tracking-tighter shadow-sm">
+                                        <div className="text-2xl md:text-6xl font-black text-rose-600/20 transform -rotate-12 select-none uppercase tracking-tighter shadow-sm">
                                             REJECTED
                                         </div>
                                     </div>

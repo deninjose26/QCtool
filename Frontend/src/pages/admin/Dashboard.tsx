@@ -47,6 +47,8 @@ interface AdminStats {
         verified_batches: number;
         accepted_images: number;
         rejected_images: number;
+        accuracy: number;
+        total_qc_pending: number;
     };
     recent_uploads: Array<{
         batch_id: string;
@@ -103,9 +105,7 @@ const SuperAdminDashboard: React.FC = () => {
         );
     }
 
-    const accuracy = stats.qc_stats.accepted_images + stats.qc_stats.rejected_images > 0
-        ? Math.round((stats.qc_stats.accepted_images / (stats.qc_stats.accepted_images + stats.qc_stats.rejected_images)) * 100)
-        : 100;
+    const accuracy = stats.qc_stats.accuracy;
 
     return (
         <div className="space-y-8 animate-fade-in pb-10">
@@ -234,13 +234,13 @@ const SuperAdminDashboard: React.FC = () => {
                                         <TrendingUp className="h-4 w-4 text-emerald-600" />
                                     </div>
                                 </div>
-                                <div className="flex items-center justify-between p-4 rounded-xl bg-red-50/50 border border-red-100/50">
+                                <div className="flex items-center justify-between p-4 rounded-xl bg-orange-50/50 border border-orange-100/50">
                                     <div>
-                                        <p className="text-xs font-bold text-slate-900">Rejected</p>
-                                        <p className="text-xl font-black text-red-600">{stats.qc_stats.rejected_images.toLocaleString()}</p>
+                                        <p className="text-xs font-bold text-slate-900">Pending QC</p>
+                                        <p className="text-xl font-black text-orange-600">{stats.qc_stats.total_qc_pending.toLocaleString()}</p>
                                     </div>
-                                    <div className="h-8 w-8 rounded-full bg-red-100 flex items-center justify-center">
-                                        <ShieldCheck className="h-4 w-4 text-red-600" />
+                                    <div className="h-8 w-8 rounded-full bg-orange-100 flex items-center justify-center">
+                                        <Clock className="h-4 w-4 text-orange-600" />
                                     </div>
                                 </div>
                             </div>

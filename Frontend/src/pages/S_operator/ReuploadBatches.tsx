@@ -22,8 +22,11 @@ import {
     FileText,
     X,
     Eye,
-    Calendar as CalendarIcon
+    Calendar as CalendarIcon,
+    CheckCircle2,
+    AlertCircle
 } from 'lucide-react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useToast } from '@/hooks/use-toast';
 import { Badge } from '@/components/ui/badge';
 import { API_BASE_URL } from '@/config';
@@ -80,6 +83,9 @@ const ReuploadBatches: React.FC = () => {
     const [isDialogOpen, setIsDialogOpen] = useState(false);
     const [selectedBatch, setSelectedBatch] = useState<OperatorBatch | null>(null);
     const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+    const [rejectedFilenames, setRejectedFilenames] = useState<string[]>([]);
+    const [invalidFileNames, setInvalidFileNames] = useState<string[]>([]);
+    const [preparationProgress, setPreparationProgress] = useState(0);
 
     // Upload Progress State
     const [uploadProgress, setUploadProgress] = useState(0);
@@ -300,7 +306,20 @@ const ReuploadBatches: React.FC = () => {
 
         setSelectedBatch(batch);
         setSelectedFiles([]);
+        setRejectedFilenames([]);
+        setInvalidFileNames([]);
         setIsDialogOpen(true);
+
+        // Fetch rejected filenames for validation
+        try {
+            const res = await fetch(`${API_BASE_URL}/operator/batches/${batch.batch_uid}/rejected-filenames`, { headers });
+            if (res.ok) {
+                const data = await res.json();
+                setRejectedFilenames(data);
+            }
+        } catch (error) {
+            console.error("Error fetching rejected filenames:", error);
+        }
     };
 
     const handleBrowseClick = () => {
@@ -336,6 +355,18 @@ const ReuploadBatches: React.FC = () => {
             return;
         }
 
+        // Strict Filename Validation for Rework
+        if (selectedBatch && rejectedFilenames.length > 0) {
+            const invalidFiles = imageFiles.filter(f => !rejectedFilenames.includes(f.name));
+            if (invalidFiles.length > 0) {
+                setInvalidFileNames(invalidFiles.map(f => f.name));
+                setSelectedFiles([]); // Reset selection if invalid
+                return;
+            }
+        }
+
+        setInvalidFileNames([]);
+
         setSelectedFiles(imageFiles);
         e.target.value = '';
     };
@@ -345,7 +376,10 @@ const ReuploadBatches: React.FC = () => {
 
         try {
             setIsSubmitting(true);
-            await storeFilesInQueue(selectedBatch.batch_uid, selectedFiles);
+            setPreparationProgress(0);
+            await storeFilesInQueue(selectedBatch.batch_uid, selectedFiles, (progress) => {
+                setPreparationProgress(progress);
+            });
             const uploadedFiles = await syncWithServer(selectedBatch.batch_uid, token);
 
             let pendingFiles = await getPendingFiles(selectedBatch.batch_uid);
@@ -673,11 +707,28 @@ const ReuploadBatches: React.FC = () => {
                             Start Re-upload Process
                         </DialogTitle>
                         <DialogDescription>
-                            Select the folder containing the <strong>corrected</strong> images for this batch.
+                            {isSubmitting
+                                ? "Please wait while we prepare your corrections..."
+                                : "Select the folder containing the corrected images for this batch."}
                         </DialogDescription>
                     </DialogHeader>
 
-                    {selectedBatch && (
+                    {isSubmitting ? (
+                        <div className="flex flex-col items-center justify-center py-12 space-y-4 animate-in fade-in zoom-in duration-300">
+                            <div className="relative flex items-center justify-center">
+                                <Loader2 className="h-16 w-16 animate-spin text-amber-600 opacity-20" />
+                                <div className="absolute inset-0 flex items-center justify-center">
+                                    <span className="text-xl font-black text-amber-600">{preparationProgress}%</span>
+                                </div>
+                            </div>
+                            <div className="w-full max-w-xs space-y-2">
+                                <Progress value={preparationProgress} className="h-2 shadow-inner" />
+                                <p className="text-[10px] text-center font-bold text-muted-foreground uppercase tracking-widest animate-pulse">
+                                    Preparing Corrections...
+                                </p>
+                            </div>
+                        </div>
+                    ) : selectedBatch && (
                         <div className="space-y-6 py-4">
                             <div className="grid grid-cols-2 gap-4 text-xs bg-slate-50 p-4 rounded-xl border border-slate-200">
                                 <div className="col-span-2 flex justify-between">
@@ -723,9 +774,45 @@ const ReuploadBatches: React.FC = () => {
                                 )}
                             </div>
 
+                            {invalidFileNames.length > 0 && (
+                                <Alert variant="destructive" className="bg-rose-50 border-rose-200 text-rose-800 animate-in fade-in zoom-in duration-300">
+                                    <AlertCircle className="h-4 w-4 text-rose-600" />
+                                    <AlertTitle className="text-xs font-black uppercase tracking-tight flex items-center justify-between">
+                                        <span>{invalidFileNames.length} Incorrect Filenames Detected</span>
+                                        <Badge className="bg-rose-600 text-white border-none text-[10px]">FIX REQUIRED</Badge>
+                                    </AlertTitle>
+                                    <AlertDescription className="text-[11px] font-medium leading-relaxed mt-2">
+                                        <p className="mb-2">In rework, files must match original rejected names <strong>EXACTLY</strong>. The following files are invalid:</p>
+                                        <div className="max-h-[120px] overflow-y-auto px-2 py-1.5 bg-white/50 rounded-lg border border-rose-100 flex flex-col gap-1 shadow-inner">
+                                            {invalidFileNames.slice(0, 10).map((name, idx) => (
+                                                <div key={idx} className="flex items-center gap-2 group">
+                                                    <div className="h-1 w-1 rounded-full bg-rose-400" />
+                                                    <code className="text-rose-700 font-bold break-all">{name}</code>
+                                                </div>
+                                            ))}
+                                            {invalidFileNames.length > 10 && (
+                                                <p className="text-[10px] text-rose-400 font-black pt-1 border-t border-rose-100 italic">
+                                                    + {invalidFileNames.length - 10} more files have naming issues
+                                                </p>
+                                            )}
+                                        </div>
+                                        <div className="mt-2 text-[9px] text-rose-600 italic">
+                                            Check for leading zeros (e.g. Image001.tif vs Image00001.tif)
+                                        </div>
+                                    </AlertDescription>
+                                </Alert>
+                            )}
+
                             <div className="flex items-start gap-2 p-3 bg-blue-50 border border-blue-100 rounded-lg text-blue-800 text-[11px]">
                                 <Info className="h-4 w-4 shrink-0" />
-                                <p>Correction should be done as per QC feedback. Only rejected images are included in this batch.</p>
+                                <div className="space-y-1">
+                                    <p className="font-bold">Important Instructions:</p>
+                                    <ul className="list-disc pl-4 space-y-0.5">
+                                        <li>Only upload the rejected images.</li>
+                                        <li>Filenames must match the original rejected names exactly.</li>
+                                        <li>Check for padding (Image00001.tif vs Image001.tif).</li>
+                                    </ul>
+                                </div>
                             </div>
                         </div>
                     )}
@@ -736,11 +823,23 @@ const ReuploadBatches: React.FC = () => {
                         </Button>
                         <Button
                             onClick={handleStartUpload}
-                            disabled={selectedFiles.length === 0 || isUploading}
+                            disabled={selectedFiles.length === 0 || isSubmitting}
                             className="bg-amber-600 hover:bg-amber-700 shadow-md shadow-amber-600/20"
                         >
-                            {isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-                            {isSubmitting ? 'Processing...' : 'Start Re-upload'}
+                            {isSubmitting ? (
+                                <div className="flex flex-col items-center gap-1">
+                                    <div className="flex items-center gap-2">
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                        <span className="text-xs font-bold uppercase tracking-wider">Processing {preparationProgress}%</span>
+                                    </div>
+                                    <Progress value={preparationProgress} className="h-1 w-24 bg-white/20" />
+                                </div>
+                            ) : (
+                                <>
+                                    <RefreshCw className="mr-2 h-4 w-4" />
+                                    Start Re-upload
+                                </>
+                            )}
                         </Button>
                     </DialogFooter>
                 </DialogContent>
