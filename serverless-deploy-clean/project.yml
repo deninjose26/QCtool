@@ -1,0 +1,24 @@
+packages:
+  - name: image-processing
+    shared: false
+    environment:
+      DO_SPACES_KEY: "DO801DZCVYXWU9FN8L98"
+      DO_SPACES_SECRET: "yK/eup8nMaFCMSJumbeMLTa338LrkYwX8icdVMDn350"
+      QC_SPACES_KEY: "DO8014Q6WBPXCWATHR9X"
+      QC_SPACES_SECRET: "7QtbTz0tiagrMZPDCdvrsHbwUoAsoVxCBG0U+E1AgwI"
+      API_BASE_URL: "https://qcportal-api.familyaconnect.com"
+      API_WEBHOOK_SECRET: "gYBtwXkmpDl_i_Vd8WYBq5rKW4FetnOkroqYDR6252I"
+      SPACES_ENDPOINT: "https://blr1.digitaloceanspaces.com"
+      SPACES_REGION: "blr1"
+      ORIGINAL_BUCKET: "purvaj-scan-original"
+      ORIGINAL_BASE_FOLDER: "FamilyaConnect-QCTool"
+      QC_BUCKET: "purvaj-panda-qc"
+      QC_BASE_FOLDER: "FamilyaConnect-QCTool"
+    actions:
+      - name: convert-image
+        runtime: "nodejs:18"
+        main: "main"
+        limits:
+          timeout: 480000
+          memory: 1024
+        web: true

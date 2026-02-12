@@ -17,9 +17,11 @@ interface ChunkedUploadOptions {
 export class ChunkedUploadManager {
     private uploadManager: UploadManager;
     private isPaused: boolean = false;
+    private userId: string;
 
-    constructor(token: string) {
+    constructor(token: string, userId: string) {
         this.uploadManager = new UploadManager(token);
+        this.userId = userId;
     }
 
     /**
@@ -46,10 +48,10 @@ export class ChunkedUploadManager {
         try {
             // Sync with server to get already uploaded files
             const uploadedFiles = await syncWithServer(batch_uid, this.uploadManager['token']);
-            const uploadedSet = new Set(uploadedFiles);
+            const uploadedSet = new Set(uploadedFiles.map(f => f.toLowerCase()));
 
-            // Filter out already uploaded files
-            const remainingFiles = allFiles.filter(f => !uploadedSet.has(f.name));
+            // Filter out already uploaded files (case-insensitive)
+            const remainingFiles = allFiles.filter(f => !uploadedSet.has(f.name.toLowerCase()));
 
             if (remainingFiles.length === 0) {
                 console.log('✅ All files already uploaded');
@@ -76,17 +78,17 @@ export class ChunkedUploadManager {
                     onChunkProgress(i + 1, totalChunks);
                 }
 
-                // Store this chunk in IndexedDB
-                await storeFilesInQueue(batch_uid, chunk);
+                // Store this chunk in IndexedDB with user_id
+                await storeFilesInQueue(this.userId, batch_uid, chunk);
 
-                // Get pending files for this chunk and extract IDs (RAM SAVER)
+                // Get pending files for this chunk (RAM SAVER)
                 const pendingFiles = await getPendingFiles(batch_uid);
-                const fileIds = pendingFiles.map(f => f.id).filter((id): id is number => id !== undefined);
+                const fileNames = pendingFiles.map(f => f.file_name);
 
                 // Upload this chunk
                 await this.uploadManager.processUploadQueue(
                     batch_uid,
-                    fileIds,
+                    fileNames,
                     (fileProgress) => {
                         if (onFileProgress) {
                             onFileProgress(fileProgress.fileName, fileProgress.progress);

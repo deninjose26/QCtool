@@ -1,0 +1,18 @@
+[
+  {
+    "apihost": "https://faas-blr1-8177d592.doserverless.co",
+    "namespace": "fn-c289ab18-745a-4336-81d4-c0c150314a3c",
+    "packageVersions": {
+      "image-processing": {
+        "version": "0.0.14",
+        "digest": "8e64df47b666fae401dea0d3e6e9f210d6c90fbdfe12332450f1e04da78101cb"
+      }
+    },
+    "actionVersions": {
+      "image-processing/convert-image": {
+        "version": "0.0.11",
+        "digest": "1672091ea0d22ec44d388fb3923aca0f64b8033dc38cda4e4bba2cc22114cf75"
+      }
+    }
+  }
+]

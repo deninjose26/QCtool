@@ -19,6 +19,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { formatError } from '@/lib/utils';
 import { API_BASE_URL } from '@/config';
+import PasswordStrength from '@/components/common/PasswordStrength';
 
 const VendorManagement: React.FC = () => {
   const { user: currentUser } = useAuth();
@@ -94,6 +95,18 @@ const VendorManagement: React.FC = () => {
       return;
     }
 
+    if (!editingUser || formData.password) {
+      const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?":{}|<>]).{8,}$/;
+      if (!passwordRegex.test(formData.password)) {
+        toast({
+          title: 'Weak Password',
+          description: 'Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, one digit, and one special character.',
+          variant: 'destructive'
+        });
+        return;
+      }
+    }
+
     try {
       if (editingUser) {
         const response = await fetch(`${API_BASE_URL}/admin/users/${editingUser.id}`, {
@@ -150,7 +163,16 @@ const VendorManagement: React.FC = () => {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this vendor?')) return;
+    if (currentUser?.role !== 'SuperAdmin') {
+      toast({
+        title: 'Permission Denied',
+        description: 'Only Admins are permitted to delete records. Please contact Administrator.',
+        variant: 'destructive'
+      });
+      return;
+    }
+
+    if (!confirm('Are you sure you want to delete this vendor account?')) return;
 
     try {
       const response = await fetch(`${API_BASE_URL}/admin/users/${id}`, {
@@ -159,7 +181,7 @@ const VendorManagement: React.FC = () => {
       });
 
       if (response.ok) {
-        toast({ title: 'Vendor deleted successfully' });
+        toast({ title: 'Success', description: 'Vendor deleted successfully' });
         fetchVendors();
       } else {
         const error = await response.json();
@@ -167,6 +189,7 @@ const VendorManagement: React.FC = () => {
       }
     } catch (error) {
       console.error('Delete error:', error);
+      toast({ title: 'Error', description: 'An unexpected error occurred', variant: 'destructive' });
     }
   };
 
@@ -284,15 +307,7 @@ const VendorManagement: React.FC = () => {
                 </div>
               </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="role">Role (Fixed)</Label>
-              <Input
-                id="role"
-                value="Vendor"
-                disabled
-                className="bg-muted text-muted-foreground cursor-not-allowed"
-              />
-            </div>
+            <PasswordStrength password={formData.password} />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Cancel</Button>
@@ -300,7 +315,7 @@ const VendorManagement: React.FC = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </div >
   );
 };
 

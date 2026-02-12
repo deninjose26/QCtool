@@ -85,6 +85,15 @@ const CreateBatch: React.FC = () => {
         return saved === 'true';
     });
 
+    const [bookValidation, setBookValidation] = useState<{
+        isValidating: boolean;
+        exists: boolean;
+        total_pages: number;
+        uploaded_pages: number;
+        remaining_pages: number;
+        batches: Array<{ batch_id: string; type: string; upload_count: number }>;
+    }>({ isValidating: false, exists: false, total_pages: 0, uploaded_pages: 0, remaining_pages: 0, batches: [] });
+
     const token = localStorage.getItem('qc_token');
     const headers = {
         'Authorization': `Bearer ${token}`,
@@ -208,6 +217,48 @@ const CreateBatch: React.FC = () => {
         };
         fetchBooks();
     }, [formData.projectId, formData.sourceId, formData.locationId, formData.recordOwnerId, formData.recordTypeId, formData.uploadType]);
+
+    // Debounced Book Name Validation
+    useEffect(() => {
+        const isHierarchySelected = formData.projectId && formData.sourceId && formData.locationId && formData.recordOwnerId && formData.recordTypeId;
+
+        if (!formData.bookName || formData.bookName.length < 3 || !isHierarchySelected || (formData.uploadType === 'partial' && !isAddingNewBook)) {
+            setBookValidation({ isValidating: false, exists: false, total_pages: 0, uploaded_pages: 0, remaining_pages: 0, batches: [] });
+            return;
+        }
+
+        const timer = setTimeout(async () => {
+            try {
+                setBookValidation(prev => ({ ...prev, isValidating: true }));
+                const params = new URLSearchParams({
+                    project_id: formData.projectId,
+                    book_name: formData.bookName,
+                    source_id: formData.sourceId,
+                    location_id: formData.locationId,
+                    record_owner_id: formData.recordOwnerId,
+                    record_type_id: formData.recordTypeId
+                });
+
+                const res = await fetch(`${API_BASE_URL}/operator/validate-book-name?${params}`, { headers });
+                if (res.ok) {
+                    const data = await res.json();
+                    setBookValidation({
+                        isValidating: false,
+                        exists: data.exists,
+                        total_pages: data.total_pages || 0,
+                        uploaded_pages: data.uploaded_pages || 0,
+                        remaining_pages: data.remaining_pages || 0,
+                        batches: data.batches || []
+                    });
+                }
+            } catch (err) {
+                console.error('Validation error:', err);
+                setBookValidation(prev => ({ ...prev, isValidating: false }));
+            }
+        }, 600);
+
+        return () => clearTimeout(timer);
+    }, [formData.bookName, formData.projectId, formData.sourceId, formData.locationId, formData.recordOwnerId, formData.recordTypeId, formData.uploadType, isAddingNewBook]);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -511,7 +562,10 @@ const CreateBatch: React.FC = () => {
                                         <>
                                             <div className="relative">
                                                 <Input
-                                                    className="h-11 uppercase pr-16"
+                                                    className={cn(
+                                                        "h-11 uppercase pr-16",
+                                                        bookValidation.exists && "border-amber-500 bg-amber-50/30 focus-visible:ring-amber-500"
+                                                    )}
                                                     placeholder="e.g. MARRIAGE REGISTER 1945"
                                                     value={formData.bookName}
                                                     maxLength={100}
@@ -521,11 +575,31 @@ const CreateBatch: React.FC = () => {
                                                         setFormData({ ...formData, bookName: sanitized });
                                                     }}
                                                 />
-                                                <div className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-muted-foreground bg-muted/50 px-2 py-1 rounded border">
-                                                    {formData.bookName.length}/100
+                                                <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                                                    {bookValidation.isValidating && <Loader2 className="h-4 w-4 animate-spin text-slate-400" />}
+                                                    <div className="text-[10px] font-bold text-muted-foreground bg-muted/50 px-2 py-1 rounded border">
+                                                        {formData.bookName.length}/100
+                                                    </div>
                                                 </div>
                                             </div>
-                                            <p className="text-xs text-muted-foreground">Only letters, numbers, spaces, and hyphens (-) allowed</p>
+
+                                            {bookValidation.exists && (
+                                                <div className="mt-2 text-xs font-semibold text-amber-600 bg-amber-50 p-2 rounded border border-amber-200 animate-in fade-in slide-in-from-top-1">
+                                                    <div className="flex items-center gap-1.5 text-amber-700 mb-1">
+                                                        <span className="text-amber-500">⚠️</span>
+                                                        <span>A batch already created against this book in this combination!</span>
+                                                    </div>
+                                                    <div className="ml-5 space-y-0.5">
+                                                        {bookValidation.batches.map((b, idx) => (
+                                                            <p key={idx} className="text-[10px] text-amber-600 font-medium">
+                                                                • Batch ID: <span className="font-bold underline decoration-amber-500/30">{b.batch_id}</span> ({b.upload_count} images)
+                                                            </p>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            <p className="text-xs text-muted-foreground mt-1">Only letters, numbers, spaces, and hyphens (-) allowed</p>
                                             {formData.uploadType === 'partial' && isAddingNewBook && (
                                                 <Button
                                                     type="button"

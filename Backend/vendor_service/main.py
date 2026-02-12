@@ -127,6 +127,7 @@ def create_operator_allocation(
     current_user: User = Depends(get_current_user)
 ):
     """Allocate a vendor's resource to one of their operators."""
+    from common.audit_logger import log_action
     if current_user.user_role != UserRole.Vendor:
         raise HTTPException(status_code=403, detail="Only Vendors can perform allocations.")
     
@@ -158,6 +159,23 @@ def create_operator_allocation(
     session.add(new_allocation)
     session.commit()
     session.refresh(new_allocation)
+
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Operator Allocated",
+        endpoint="/vendor/operator-allocations",
+        method="POST",
+        payload={
+            "operator_id": str(data.operator_id),
+            "operator_name": operator.name,
+            "vendor_allocation_id": str(data.vendor_allocation_id)
+        },
+        result="success"
+    )
+
     return new_allocation
 
 @router.get("/operator-allocations", response_model=List[OperatorAllocationRead])
@@ -208,6 +226,7 @@ def update_operator_allocation(
     current_user: User = Depends(get_current_user)
 ):
     """Update or toggle an operator allocation."""
+    from common.audit_logger import log_action
     if current_user.user_role != UserRole.Vendor:
         raise HTTPException(status_code=403, detail="Only Vendors can perform updates.")
     
@@ -220,21 +239,46 @@ def update_operator_allocation(
     if not va or va.allocated_to_vendor != current_user.user_id:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    changes = {}
+
     if data.operator_id:
+        if oa.allocated_to_operator != data.operator_id:
+             changes["operator_id"] = {"old": str(oa.allocated_to_operator), "new": str(data.operator_id)}
         oa.allocated_to_operator = data.operator_id
     if data.vendor_allocation_id:
         # Check if they have access to the new resource
         new_va = session.get(VendorAllocation, data.vendor_allocation_id)
         if not new_va or new_va.allocated_to_vendor != current_user.user_id:
             raise HTTPException(status_code=400, detail="Invalid target resource")
+        if oa.vendor_allocation_id != data.vendor_allocation_id:
+            changes["vendor_allocation_id"] = {"old": str(oa.vendor_allocation_id), "new": str(data.vendor_allocation_id)}
         oa.vendor_allocation_id = data.vendor_allocation_id
     
     if data.is_active is not None:
+        if oa.is_active != data.is_active:
+             changes["is_active"] = {"old": oa.is_active, "new": data.is_active}
         oa.is_active = data.is_active
 
     session.add(oa)
     session.commit()
     session.refresh(oa)
+
+    # Log the action
+    if changes:
+        log_action(
+            session=session,
+            user_id=current_user.user_id,
+            username=current_user.username,
+            action="Operator Allocation Updated",
+            endpoint=f"/vendor/operator-allocations/{allocation_id}",
+            method="PUT",
+            payload={
+                "allocation_id": str(allocation_id),
+                "changes": changes
+            },
+            result="success"
+        )
+
     return oa
 
 @router.delete("/operator-allocations/{allocation_id}")
@@ -244,6 +288,7 @@ def delete_operator_allocation(
     current_user: User = Depends(get_current_user)
 ):
     """Hard delete an operator allocation."""
+    from common.audit_logger import log_action
     if current_user.user_role != UserRole.Vendor:
         raise HTTPException(status_code=403, detail="Only Vendors can perform deletions.")
 
@@ -256,8 +301,26 @@ def delete_operator_allocation(
     if not va or va.allocated_to_vendor != current_user.user_id:
         raise HTTPException(status_code=403, detail="Access denied")
     
+    operator_id = oa.allocated_to_operator
+
     session.delete(oa)
     session.commit()
+
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Operator Allocation Deleted",
+        endpoint=f"/vendor/operator-allocations/{allocation_id}",
+        method="DELETE",
+        payload={
+            "allocation_id": str(allocation_id),
+            "operator_id": str(operator_id)
+        },
+        result="success"
+    )
+
     return {"message": "Allocation removed successfully"}
 
 # --- Upload History ---
@@ -539,6 +602,7 @@ def reallocate_batch(
     current_user: User = Depends(get_current_user)
 ):
     """Reallocate a batch to a different operator under the same resource allocation"""
+    from common.audit_logger import log_action
     if current_user.user_role != UserRole.Vendor:
         raise HTTPException(status_code=403, detail="Only Vendors can reallocate batches.")
 
@@ -550,6 +614,8 @@ def reallocate_batch(
     current_soa = session.get(ScanningOperatorAllocation, batch.scanning_operator_allocation_id)
     if not current_soa:
         raise HTTPException(status_code=404, detail="Current batch allocation not found")
+
+    old_operator_id = current_soa.allocated_to_operator
 
     # Verify vendor owns this allocation
     va = session.get(VendorAllocation, current_soa.vendor_allocation_id)
@@ -585,15 +651,32 @@ def reallocate_batch(
         create_notification(
             session=session,
             user_id=data.operator_id,
-            notif_type=NotificationType.QC_Assigned, # Reusing type for assignment
+            notif_type=NotificationType.qc_assigned, # Reusing type for assignment
             title="New Batch Allocated",
-            message=f"Vendor {current_user.name} has allocated Batch {batch.batch_id} to you.",
+            message=f"{current_user.name} has allocated {'a rework batch' if batch.is_reupload else 'Batch'} {batch.batch_id} to you.",
             link="/upload"  # Operator upload page
         )
     except Exception as e:
         print(f"⚠️ Failed to create notification: {e}")
 
     session.commit()
+
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Batch Reallocated",
+        endpoint=f"/vendor/reallocate-batch/{batch_uid}",
+        method="PUT",
+        payload={
+            "batch_uid": str(batch_uid),
+            "batch_id": batch.batch_id,
+            "old_operator_id": str(old_operator_id),
+            "new_operator_id": str(data.operator_id)
+        },
+        result="success"
+    )
 
     return {"message": "Batch reallocated successfully", "new_operator_id": str(data.operator_id)}
 
@@ -604,6 +687,7 @@ def approve_rework_batch(
     current_user: User = Depends(get_current_user)
 ):
     """Vendor approves/releases a rework batch for the operator"""
+    from common.audit_logger import log_action
     if current_user.user_role != UserRole.Vendor:
         raise HTTPException(status_code=403, detail="Only Vendors can approve rework.")
 
@@ -628,15 +712,31 @@ def approve_rework_batch(
         create_notification(
             session=session,
             user_id=soa.allocated_to_operator,
-            notif_type=NotificationType.Batch_Rejected,
+            notif_type=NotificationType.batch_rejected,
             title="Rework Batch Released",
-            message=f"Vendor {current_user.name} has approved and released Rework Batch {batch.batch_id} to you.",
+            message=f"{current_user.name} has approved and released a rework batch {batch.batch_id} to you.",
             link="/re-upload"  # Operator re-upload page
         )
     except Exception as e:
         print(f"⚠️ Failed to create notification: {e}")
 
     session.commit()
+
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Rework Batch Approved",
+        endpoint=f"/vendor/approve-rework/{batch_uid}",
+        method="POST",
+        payload={
+            "batch_uid": str(batch_uid),
+            "batch_id": batch.batch_id,
+            "operator_id": str(soa.allocated_to_operator)
+        },
+        result="success"
+    )
 
     return {"message": "Rework batch approved and released to operator"}
 

@@ -80,6 +80,7 @@ const AdminUploadHistory: React.FC = () => {
     const [bookFilter, setBookFilter] = useState<string>('all');
     const [uploadTypeFilter, setUploadTypeFilter] = useState<string>('all');
     const [dateRange, setDateRange] = useState<DateRange | undefined>();
+    const [isExporting, setIsExporting] = useState(false);
 
     useEffect(() => {
         fetchHistory();
@@ -178,38 +179,49 @@ const AdminUploadHistory: React.FC = () => {
         setFilteredBatches(result);
     }, [batches, searchTerm, projectFilter, sourceFilter, vendorFilter, operatorFilter, locationFilter, ownerFilter, typeFilter, bookFilter, uploadTypeFilter, dateRange]);
 
-    const handleExport = () => {
-        const exportData = filteredBatches.map(b => ({
-            batch_id: b.batch_id,
-            project: b.project_name,
-            source: b.source_name,
-            vendor: b.vendor_name,
-            operator: b.operator_name,
-            location: b.location_name,
-            owner: b.record_owner_name,
-            record_type: b.record_type_name,
-            upload_type: b.upload_type,
-            book: b.book_name,
-            images: b.completed_count,
-            completed_at: formatToLocalTime(b.upload_end_date)
-        }));
+    const handleExport = async () => {
+        try {
+            setIsExporting(true);
+            // Simulate brief delay for large history sets
+            await new Promise(resolve => setTimeout(resolve, 800));
 
-        const headers = {
-            batch_id: 'Batch ID',
-            project: 'Project',
-            source: 'Source',
-            vendor: 'Vendor',
-            operator: 'Operator',
-            location: 'Location',
-            owner: 'Record Owner',
-            record_type: 'Record Type',
-            upload_type: 'Upload Type',
-            book: 'Book Name',
-            images: 'Total Images',
-            completed_at: 'Completion Date'
-        };
+            const exportData = filteredBatches.map(b => ({
+                batch_id: b.batch_id,
+                project: b.project_name,
+                source: b.source_name,
+                vendor: b.vendor_name,
+                operator: b.operator_name,
+                location: b.location_name,
+                owner: b.record_owner_name,
+                record_type: b.record_type_name,
+                upload_type: b.upload_type,
+                book: b.book_name,
+                images: b.completed_count,
+                completed_at: formatToLocalTime(b.upload_end_date)
+            }));
 
-        exportToExcel(exportData, 'Admin_Master_Upload_History', headers);
+            const headers = {
+                batch_id: 'Batch ID',
+                project: 'Project',
+                source: 'Source',
+                vendor: 'Vendor',
+                operator: 'Operator',
+                location: 'Location',
+                owner: 'Record Owner',
+                record_type: 'Record Type',
+                upload_type: 'Upload Type',
+                book: 'Book Name',
+                images: 'Total Images',
+                completed_at: 'Completion Date'
+            };
+
+            exportToExcel(exportData, 'Admin_Master_Upload_History', headers);
+            toast({ title: 'Export Success', description: `Successfully exported ${filteredBatches.length} records.` });
+        } catch (error) {
+            toast({ title: 'Export Failed', description: 'Could not generate report.', variant: 'destructive' });
+        } finally {
+            setIsExporting(false);
+        }
     };
 
     const resetFilters = () => {
@@ -398,12 +410,19 @@ const AdminUploadHistory: React.FC = () => {
 
                 <div className="flex items-center gap-3">
                     <Button
+                        variant="ghost"
+                        size="sm"
+                        className={cn(
+                            "text-white h-9 font-semibold text-xs gap-2 shadow-sm border-none transition-all px-4",
+                            filteredBatches.length > 0
+                                ? "bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20"
+                                : "bg-slate-300 text-slate-500 cursor-not-allowed"
+                        )}
                         onClick={handleExport}
-                        disabled={filteredBatches.length === 0}
-                        className="bg-indigo-600 hover:bg-indigo-700 shadow-lg shadow-indigo-600/20 gap-2 h-9 text-xs font-bold uppercase tracking-wider"
+                        disabled={isExporting || filteredBatches.length === 0}
                     >
-                        <Download className="h-4 w-4" />
-                        Global Export (XLSX)
+                        {isExporting ? <Loader2 className="h-4 w-4 animate-spin text-white" /> : <Download className="h-4 w-4" />}
+                        Export to Excel
                     </Button>
 
                     <Button

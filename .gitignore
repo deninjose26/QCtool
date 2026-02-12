@@ -1,0 +1,56 @@
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Keep production templates but not actual .env files
+!.env.production.template
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+
+# Node
+node_modules/
+dist/
+.cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+system_logs/
+logs/
+
+# Database
+*.db
+*.sqlite
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+
+# Build artifacts
+build/
+*.egg-info/
+
+# Coverage reports
+htmlcov/
+.coverage
+.pytest_cache/

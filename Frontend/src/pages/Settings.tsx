@@ -9,7 +9,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import {
     Sun, Moon, Monitor, Laptop, Info, Mail, Bell, Wrench, RefreshCw,
     Loader2, AlertTriangle, ShieldAlert, Database, FolderOpen,
-    ChevronRight, ChevronLeft, HardDrive, Folder
+    ChevronRight, ChevronLeft, HardDrive, Folder, Lock, Shield
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
@@ -46,6 +46,10 @@ const Settings: React.FC = () => {
     const [isSavingPath, setIsSavingPath] = useState(false);
     const [allowMultipleVendors, setAllowMultipleVendors] = useState(false);
     const [isUpdatingAllocSetting, setIsUpdatingAllocSetting] = useState(false);
+    const [auditLogsEnabled, setAuditLogsEnabled] = useState(false);
+    const [isUpdatingAuditLogs, setIsUpdatingAuditLogs] = useState(false);
+    const [manualLockReleaseEnabled, setManualLockReleaseEnabled] = useState(false);
+    const [isUpdatingManualLockRelease, setIsUpdatingManualLockRelease] = useState(false);
 
     // Folder Picker States
     const [isPickerOpen, setIsPickerOpen] = useState(false);
@@ -85,6 +89,20 @@ const Settings: React.FC = () => {
                     if (allocRes.ok) {
                         const data = await allocRes.json();
                         setAllowMultipleVendors(data.setting_value === 'true');
+                    }
+
+                    // Fetch audit logs setting
+                    const auditRes = await apiFetch(`${API_BASE_URL}/admin/settings/enable_audit_logs`);
+                    if (auditRes.ok) {
+                        const data = await auditRes.json();
+                        setAuditLogsEnabled(data.setting_value === 'true');
+                    }
+
+                    // Fetch manual lock release setting
+                    const lockRes = await apiFetch(`${API_BASE_URL}/admin/settings/enable_manual_lock_release`);
+                    if (lockRes.ok) {
+                        const data = await lockRes.json();
+                        setManualLockReleaseEnabled(data.setting_value === 'true');
                     }
                 }
             } catch (error) {
@@ -217,6 +235,68 @@ const Settings: React.FC = () => {
             });
         } finally {
             setIsUpdatingAllocSetting(false);
+        }
+    };
+
+    const handleToggleAuditLogs = async (enabled: boolean) => {
+        try {
+            setIsUpdatingAuditLogs(true);
+            const res = await apiFetch(`${API_BASE_URL}/admin/settings/enable_audit_logs`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ value: String(enabled) })
+            });
+
+            if (res.ok) {
+                setAuditLogsEnabled(enabled);
+
+                // Dispatch event to update sidebar instantly
+                window.dispatchEvent(new Event('settings-updated'));
+
+                toast({
+                    title: 'Audit Logs Updated',
+                    description: `Audit logging is now ${enabled ? 'enabled' : 'disabled'}. Sidebar updated.`,
+                });
+            } else {
+                throw new Error('Failed to update setting');
+            }
+        } catch (error) {
+            toast({
+                title: 'Operation Failed',
+                description: 'Could not update audit logs setting',
+                variant: 'destructive'
+            });
+        } finally {
+            setIsUpdatingAuditLogs(false);
+        }
+    };
+
+    const handleToggleManualLockRelease = async (enabled: boolean) => {
+        try {
+            setIsUpdatingManualLockRelease(true);
+            const res = await apiFetch(`${API_BASE_URL}/admin/settings/enable_manual_lock_release`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ value: String(enabled) })
+            });
+
+            if (res.ok) {
+                setManualLockReleaseEnabled(enabled);
+                toast({
+                    title: 'Security Policy Updated',
+                    description: `Manual lock release is now ${enabled ? 'enabled' : 'disabled'}.`,
+                });
+            } else {
+                throw new Error('Failed to update setting');
+            }
+        } catch (error) {
+            toast({
+                title: 'Operation Failed',
+                description: 'Could not update manual lock release setting',
+                variant: 'destructive'
+            });
+        } finally {
+            setIsUpdatingManualLockRelease(false);
         }
     };
 
@@ -573,6 +653,118 @@ const Settings: React.FC = () => {
                         </DialogFooter>
                     </DialogContent>
                 </Dialog>
+
+                {/* Audit Logs - SuperAdmin Only */}
+                {user?.role === 'SuperAdmin' && (
+                    <Card className="border-none shadow-md shadow-slate-200/50 ring-1 ring-slate-200/60 overflow-hidden bg-white">
+                        <CardHeader className="pb-4">
+                            <div className="flex items-center gap-3">
+                                <div className="h-10 w-10 rounded-xl bg-emerald-50 flex items-center justify-center">
+                                    <Database className="h-5 w-5 text-emerald-600" />
+                                </div>
+                                <div>
+                                    <CardTitle className="text-sm font-black uppercase tracking-widest text-slate-800">Audit Logs</CardTitle>
+                                    <CardDescription className="text-xs font-medium text-slate-400">Track user actions for accountability</CardDescription>
+                                </div>
+                            </div>
+                        </CardHeader>
+                        <CardContent className="p-6">
+                            <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-100">
+                                <div className="flex items-center gap-3">
+                                    <div className="h-12 w-12 rounded-lg bg-white border border-slate-200 flex items-center justify-center">
+                                        <Database className={cn(
+                                            "h-6 w-6 transition-colors",
+                                            auditLogsEnabled ? "text-emerald-500" : "text-slate-300"
+                                        )} />
+                                    </div>
+                                    <div>
+                                        <Label className="text-sm font-bold text-slate-900 cursor-pointer">
+                                            Enable Audit Logs
+                                        </Label>
+                                        <p className="text-xs text-slate-500 font-medium mt-0.5">
+                                            Track all user actions including deletions, updates, and approvals
+                                        </p>
+                                    </div>
+                                </div>
+                                <Switch
+                                    checked={auditLogsEnabled}
+                                    onCheckedChange={handleToggleAuditLogs}
+                                    disabled={isUpdatingAuditLogs}
+                                    className="data-[state=checked]:bg-emerald-500"
+                                />
+                            </div>
+
+                            {auditLogsEnabled && (
+                                <div className="mt-4 p-4 bg-emerald-50 border border-emerald-100 rounded-xl">
+                                    <p className="text-xs text-emerald-700 font-semibold flex items-center gap-2">
+                                        <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                                        Audit logging is active
+                                    </p>
+                                    <p className="text-xs text-emerald-600 mt-1 ml-4">
+                                        View logs in the Admin Dashboard sidebar. All user actions are being tracked.
+                                    </p>
+                                </div>
+                            )}
+                        </CardContent>
+                    </Card>
+                )}
+
+                {/* Manual Lock Release - SuperAdmin Only */}
+                {user?.role === 'SuperAdmin' && (
+                    <Card className="border-none shadow-md shadow-slate-200/50 ring-1 ring-slate-200/60 overflow-hidden bg-white">
+                        <CardHeader className="pb-4">
+                            <div className="flex items-center gap-3">
+                                <div className="h-10 w-10 rounded-xl bg-amber-50 flex items-center justify-center">
+                                    <Lock className="h-5 w-5 text-amber-600" />
+                                </div>
+                                <div>
+                                    <CardTitle className="text-sm font-black uppercase tracking-widest text-slate-800">Upload Locking & Security</CardTitle>
+                                    <CardDescription className="text-xs font-medium text-slate-400">Configure how batch locks are managed</CardDescription>
+                                </div>
+                            </div>
+                        </CardHeader>
+                        <CardContent className="p-6">
+                            <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-100">
+                                <div className="flex items-center gap-3">
+                                    <div className="h-12 w-12 rounded-lg bg-white border border-slate-200 flex items-center justify-center">
+                                        <Shield className={cn(
+                                            "h-6 w-6 transition-colors",
+                                            manualLockReleaseEnabled ? "text-amber-500" : "text-slate-300"
+                                        )} />
+                                    </div>
+                                    <div>
+                                        <Label className="text-sm font-bold text-slate-900 cursor-pointer">
+                                            Enable Manual Lock Release
+                                        </Label>
+                                        <p className="text-xs text-slate-500 font-medium mt-0.5">
+                                            Allow operators to manually release a batch lock if they are blocked by a previous session
+                                        </p>
+                                    </div>
+                                </div>
+                                <Switch
+                                    checked={manualLockReleaseEnabled}
+                                    onCheckedChange={handleToggleManualLockRelease}
+                                    disabled={isUpdatingManualLockRelease}
+                                    className="data-[state=checked]:bg-amber-500"
+                                />
+                            </div>
+
+                            {manualLockReleaseEnabled && (
+                                <div className="mt-4 p-4 bg-amber-50 border border-amber-100 rounded-xl flex items-start gap-3">
+                                    <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5" />
+                                    <div>
+                                        <p className="text-xs text-amber-700 font-semibold">
+                                            Manual lock override is active
+                                        </p>
+                                        <p className="text-[10px] text-amber-600 mt-0.5 font-medium leading-relaxed">
+                                            Operators can now bypass the 24-hour protection period. Use this sparingly as it can lead to concurrent uploads if misused.
+                                        </p>
+                                    </div>
+                                </div>
+                            )}
+                        </CardContent>
+                    </Card>
+                )}
 
                 {/* Troubleshooting */}
                 {user?.role === 'SuperAdmin' && (

@@ -17,14 +17,14 @@ export default defineConfig(({ mode }) => ({
     react(),
     mode === "development" && componentTagger(),
     VitePWA({
-      registerType: 'autoUpdate',
+      registerType: 'prompt', // Use prompt-based update to avoid background reload glitches
       includeAssets: ['favicon.ico', 'logo.png'],
       manifest: {
         name: 'FamilyaConnect QC Portal',
         short_name: 'QC Portal',
         description: 'Enterprise Document Management & Quality Control Portal',
         theme_color: '#0f172a',
-        background_color: '#ffffff',
+        background_color: '#0f172a',
         display: 'standalone',
         orientation: 'portrait',
         scope: '/',
@@ -54,6 +54,9 @@ export default defineConfig(({ mode }) => ({
         ]
       },
       workbox: {
+        cleanupOutdatedCaches: true, // Auto clean old caches
+        skipWaiting: true,           // Take control immediately on update
+        clientsClaim: true,          // Start controlling clients immediately
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
         runtimeCaching: [
           {
@@ -113,7 +116,7 @@ export default defineConfig(({ mode }) => ({
         ]
       },
       devOptions: {
-        enabled: true,
+        enabled: false, // Disable PWA in DEV to prevent reload/cache issues
         type: 'module'
       }
     })

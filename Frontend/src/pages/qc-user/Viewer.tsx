@@ -98,6 +98,7 @@ const QCPanel: React.FC = () => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [allocationId, setAllocationId] = useState<string | null>(null);
   const [isFinalizing, setIsFinalizing] = useState(false);
+  const [batchStats, setBatchStats] = useState({ pending: 0, accepted: 0, rejected: 0 });
 
   const currentImage = filteredImages[currentIndex];
 
@@ -128,7 +129,7 @@ const QCPanel: React.FC = () => {
       try {
         setIsLoading(true);
         const filterParam = statusFilter !== 'all' ? `filter_status=${statusFilter}&` : '';
-        const res = await fetch(`${API_BASE_URL}/qc/batch-images/${batchId}?${filterParam}limit=100&offset=0`, {
+        const res = await fetch(`${API_BASE_URL}/qc/batch-images/${batchId}?${filterParam}limit=200&offset=0`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
 
@@ -143,6 +144,11 @@ const QCPanel: React.FC = () => {
         setHasMore(data.has_more);
         setImages(data.images);
         setFilteredImages(data.images);
+        setBatchStats({
+          pending: data.pending_count || 0,
+          accepted: data.accepted_count || 0,
+          rejected: data.rejected_count || 0
+        });
 
         // Auto-resume: find first pending image ONLY in 'all' view
         if (statusFilter === 'all') {
@@ -180,7 +186,7 @@ const QCPanel: React.FC = () => {
           setIsLoadingMore(true);
           const offset = images.length;
           const filterParam = statusFilter !== 'all' ? `filter_status=${statusFilter}&` : '';
-          const res = await fetch(`${API_BASE_URL}/qc/batch-images/${batchId}?${filterParam}limit=100&offset=${offset}`, {
+          const res = await fetch(`${API_BASE_URL}/qc/batch-images/${batchId}?${filterParam}limit=200&offset=${offset}`, {
             headers: { 'Authorization': `Bearer ${token}` }
           });
 
@@ -190,6 +196,11 @@ const QCPanel: React.FC = () => {
             setHasMore(data.has_more);
             setImages(prev => [...prev, ...data.images]);
             setFilteredImages(prev => [...prev, ...data.images]);
+            setBatchStats({
+              pending: data.pending_count || 0,
+              accepted: data.accepted_count || 0,
+              rejected: data.rejected_count || 0
+            });
           }
         } catch (error) {
           toast({ title: 'Error loading more images', variant: 'destructive' });
@@ -281,16 +292,50 @@ const QCPanel: React.FC = () => {
 
   const updateLocalState = (status: 'Approved' | 'Rejected', remarks?: string) => {
     if (!currentImage) return;
+
+    // Calculate previous status to update stats
+    const prevStatus = currentImage.qc_status;
+
     setImages(images.map(img =>
       img.qc_id === currentImage.qc_id
         ? { ...img, qc_status: status, orientation_error: orientationIssue, remarks: remarks || null }
         : img
     ));
+
+    // Update batch stats locally
+    setBatchStats(prev => {
+      const newStats = { ...prev };
+
+      // Remove from previous status
+      if (prevStatus === 'Pending') newStats.pending--;
+      else if (prevStatus === 'Approved') newStats.accepted--;
+      else if (prevStatus === 'Rejected') newStats.rejected--;
+
+      // Add to new status
+      if (status === 'Approved') newStats.accepted++;
+      else if (status === 'Rejected') newStats.rejected++;
+
+      return newStats;
+    });
   };
 
   const moveToNext = () => {
     if (currentIndex < filteredImages.length - 1) {
       setCurrentIndex(currentIndex + 1);
+
+      // Auto-load pre-fetching: When user is 20 images away from the end, trigger load more
+      if (currentIndex + 20 >= filteredImages.length && hasMore && !isLoadingMore) {
+        loadMoreImages();
+      }
+    } else if (hasMore && !isLoadingMore) {
+      // Reached the very end, try to load more and move
+      loadMoreImages();
+    }
+  };
+
+  const moveToPrev = () => {
+    if (currentIndex > 0) {
+      setCurrentIndex(currentIndex - 1);
     }
   };
 
@@ -410,10 +455,10 @@ const QCPanel: React.FC = () => {
         case 'o': setOrientationIssue(!orientationIssue); break;
         case 'f': toggleFullscreen(); break;
         case 'arrowleft':
-          if (currentIndex > 0) setCurrentIndex(currentIndex - 1);
+          moveToPrev();
           break;
         case 'arrowright':
-          if (currentIndex < filteredImages.length - 1) setCurrentIndex(currentIndex + 1);
+          moveToNext();
           break;
         case 'arrowup':
           if (viewerRef.current && !isFullscreen) {
@@ -457,13 +502,9 @@ const QCPanel: React.FC = () => {
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
   }, []);
 
-  const stats = {
-    pending: images.filter(img => img.qc_status === 'Pending').length,
-    accepted: images.filter(img => img.qc_status === 'Approved').length,
-    rejected: images.filter(img => img.qc_status === 'Rejected').length,
-  };
+  const allReviewed = batchStats.pending === 0 && totalImages > 0 && !hasMore;
 
-  const allReviewed = stats.pending === 0 && images.length > 0 && !hasMore;
+  const stats = batchStats;
 
   return (
     <div className="space-y-4 animate-fade-in pb-10">
@@ -535,9 +576,9 @@ const QCPanel: React.FC = () => {
           />
         </div>
 
-        {filteredImages.length > 0 && (
+        {totalImages > 0 && (
           <div className="ml-auto text-sm text-slate-500 font-semibold bg-slate-50 px-3 py-1 rounded-lg border border-slate-100">
-            {currentIndex + 1} / {filteredImages.length}
+            {currentIndex + 1} / {searchTerm ? filteredImages.length : totalImages}
           </div>
         )}
       </div>
@@ -796,29 +837,18 @@ const QCPanel: React.FC = () => {
                 </CardContent>
               </Card>
 
-              {!isFullscreen && hasMore && (
-                <div className="text-center py-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={loadMoreImages}
-                    disabled={isLoadingMore}
-                  >
-                    {isLoadingMore ? "Loading..." : `Load More (${totalImages - images.length} remaining)`}
-                  </Button>
-                </div>
-              )}
+              {/* Pagination/Load More button removed as per request - Auto-loading is handled by navigation */}
 
               {isFullscreen ? (
                 <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-20">
                   <div className="flex items-center bg-slate-900/95 backdrop-blur-xl px-2 py-1.5 rounded-2xl shadow-2xl border border-white/10">
-                    <Button variant="ghost" size="icon" className="text-white/70 hover:text-white" onClick={() => setCurrentIndex(Math.max(0, currentIndex - 1))} disabled={currentIndex === 0}>
+                    <Button variant="ghost" size="icon" className="text-white/70 hover:text-white" onClick={moveToPrev} disabled={currentIndex === 0}>
                       <ChevronLeft className="h-6 w-6" />
                     </Button>
                     <div className="px-6 text-xl font-bold text-white tabular-nums min-w-[100px] text-center">
-                      {currentIndex + 1} / {filteredImages.length}
+                      {currentIndex + 1} / {searchTerm ? filteredImages.length : totalImages}
                     </div>
-                    <Button variant="ghost" size="icon" className="text-white/70 hover:text-white" onClick={() => setCurrentIndex(Math.min(filteredImages.length - 1, currentIndex + 1))} disabled={currentIndex === filteredImages.length - 1}>
+                    <Button variant="ghost" size="icon" className="text-white/70 hover:text-white" onClick={moveToNext} disabled={currentIndex === filteredImages.length - 1 && !hasMore}>
                       <ChevronRight className="h-6 w-6" />
                     </Button>
                   </div>
@@ -826,16 +856,16 @@ const QCPanel: React.FC = () => {
               ) : (
                 <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-20">
                   <div className="flex items-center gap-1 bg-white/90 backdrop-blur-md px-1 py-1 rounded-xl shadow-lg border border-slate-200">
-                    <Button variant="ghost" size="sm" className="h-9 px-2 text-slate-600" onClick={() => setCurrentIndex(Math.max(0, currentIndex - 1))} disabled={currentIndex === 0}>
+                    <Button variant="ghost" size="sm" className="h-9 px-2 text-slate-600" onClick={moveToPrev} disabled={currentIndex === 0}>
                       <ChevronLeft className="h-4 w-4" />
                       <span className="text-xs">Prev</span>
                     </Button>
                     <div className="h-4 w-px bg-slate-200 mx-1" />
                     <div className="px-3 text-xs font-bold tabular-nums">
-                      {currentIndex + 1} / {filteredImages.length}
+                      {currentIndex + 1} / {searchTerm ? filteredImages.length : totalImages}
                     </div>
                     <div className="h-4 w-px bg-slate-200 mx-1" />
-                    <Button variant="ghost" size="sm" className="h-9 px-2 text-slate-600" onClick={() => setCurrentIndex(Math.min(filteredImages.length - 1, currentIndex + 1))} disabled={currentIndex === filteredImages.length - 1}>
+                    <Button variant="ghost" size="sm" className="h-9 px-2 text-slate-600" onClick={moveToNext} disabled={currentIndex === filteredImages.length - 1 && !hasMore}>
                       <span className="text-xs">Next</span>
                       <ChevronRight className="h-4 w-4" />
                     </Button>

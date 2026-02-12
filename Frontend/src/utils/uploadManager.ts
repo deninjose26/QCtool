@@ -1,13 +1,7 @@
-/**
- * Upload Manager
- * Handles direct-to-S3 uploads with progress tracking and error handling
- */
-
 import { API_BASE_URL } from '@/config';
-import { QueuedFile, updateFileStatus, updateFileProgress } from './uploadDB';
+import { db, updateFileStatus, updateFileProgress, QueuedFile } from './uploadDB';
 
 interface UploadProgress {
-    fileId: number;
     fileName: string;
     progress: number;
     status: 'uploading' | 'uploaded' | 'failed';
@@ -22,427 +16,254 @@ interface BatchProgress {
 
 export class UploadManager {
     private token: string;
-    private abortController: AbortController | null = null;
     private isPaused: boolean = false;
+    private static activeInstances: Set<UploadManager> = new Set();
+    private activeRequests: Set<XMLHttpRequest> = new Set();
+    private onOfflineDetected?: () => void;
 
-    constructor(token: string) {
+    constructor(token: string, onOfflineDetected?: () => void) {
         this.token = token;
+        this.onOfflineDetected = onOfflineDetected;
+        UploadManager.activeInstances.add(this);
     }
 
-    /**
-     * Request a pre-signed URL from the backend
-     */
-    private async requestPresignedUrl(
-        batch_uid: string,
-        file_name: string,
-        file_size: number
-    ): Promise<{ upload_url: string; s3_path: string }> {
-        const response = await fetch(
-            `${API_BASE_URL}/operator/batches/${batch_uid}/request-upload-url`,
-            {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${this.token}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    batch_uid,
-                    file_name,
-                    file_size,
-                    content_type: 'image/tiff'
-                })
-            }
-        );
+    public static stopAllInstances() {
+        for (const instance of UploadManager.activeInstances) {
+            instance.destroy();
+        }
+        UploadManager.activeInstances.clear();
+    }
 
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to get upload URL');
+    public static resetGlobalStop() {
+        // Reset global state if needed - currently just clears any stale data
+        UploadManager.activeInstances.clear();
+        console.log('🔄 UploadManager: Global state reset');
+    }
+
+    public pause() {
+        this.isPaused = true;
+        for (const xhr of this.activeRequests) {
+            xhr.abort();
+        }
+        this.activeRequests.clear();
+    }
+
+    public resume() {
+        this.isPaused = false;
+    }
+
+    public destroy() {
+        this.pause();
+        UploadManager.activeInstances.delete(this);
+    }
+
+    private async requestPresignedUrl(batch_uid: string, file_name: string, file_size: number): Promise<{ upload_url: string, s3_path: string }> {
+        const res = await fetch(`${API_BASE_URL}/operator/batches/${batch_uid}/request-upload-url`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${this.token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ batch_uid, file_name, file_size })
+        });
+
+        if (!res.ok) {
+            if (res.status === 401 || res.status === 403) throw new Error('AUTH_ERROR');
+            throw new Error('Failed to get presigned URL');
         }
 
-        return await response.json();
+        return await res.json();
     }
 
-    /**
-     * Upload file directly to S3 using pre-signed URL
-     */
-    private async uploadToS3(
+    private uploadToS3(
+        batch_uid: string,
+        file_name: string,
         upload_url: string,
-        file_blob: Blob,
+        blob: Blob,
         onProgress?: (progress: number) => void
     ): Promise<void> {
         return new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest();
-
-            // Track upload progress
-            xhr.upload.addEventListener('progress', (e) => {
-                if (e.lengthComputable && onProgress) {
-                    const percentComplete = (e.loaded / e.total) * 100;
-                    onProgress(Math.round(percentComplete));
-                }
-            });
-
-            xhr.addEventListener('load', () => {
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    resolve();
-                } else {
-                    reject(new Error(`S3 upload failed with status ${xhr.status}`));
-                }
-            });
-
-            xhr.addEventListener('error', () => {
-                reject(new Error('Network error during S3 upload'));
-            });
-
-            xhr.addEventListener('abort', () => {
-                reject(new Error('Upload aborted'));
-            });
+            this.activeRequests.add(xhr);
 
             xhr.open('PUT', upload_url);
-            xhr.setRequestHeader('Content-Type', 'image/tiff');
-            xhr.send(file_blob);
 
-            // Store XHR for potential abort
-            this.abortController = {
-                abort: () => xhr.abort()
-            } as any;
+            xhr.upload.onprogress = (e) => {
+                if (e.lengthComputable && onProgress) {
+                    const percent = Math.round((e.loaded / e.total) * 100);
+                    onProgress(percent);
+                }
+            };
+
+            xhr.onload = () => {
+                this.activeRequests.delete(xhr);
+                if (xhr.status === 200) resolve();
+                else reject(new Error(`S3 Upload failed: ${xhr.status}`));
+            };
+
+            xhr.onerror = () => {
+                this.activeRequests.delete(xhr);
+                if (!navigator.onLine && this.onOfflineDetected) this.onOfflineDetected();
+                reject(new Error('S3 Network Error'));
+            };
+
+            xhr.onabort = () => {
+                this.activeRequests.delete(xhr);
+                reject(new Error('UPLOAD_ABORTED'));
+            };
+
+            xhr.send(blob);
         });
     }
 
-    /**
-     * Notify backend that upload is complete
-     */
-    private async notifyUploadComplete(
-        batch_uid: string,
-        file_name: string,
-        s3_path: string,
-        file_size: number
-    ): Promise<any> {
-        const response = await fetch(
-            `${API_BASE_URL}/operator/batches/${batch_uid}/upload-complete`,
-            {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${this.token}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    batch_uid,
-                    file_name,
-                    s3_path,
-                    file_size
-                })
-            }
-        );
+    private async notifyUploadComplete(batch_uid: string, file_name: string, s3_path: string, file_size: number): Promise<void> {
+        const res = await fetch(`${API_BASE_URL}/operator/batches/${batch_uid}/upload-complete`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${this.token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ batch_uid, file_name, s3_path, file_size })
+        });
 
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to notify upload completion');
-        }
-
-        return await response.json();
+        if (!res.ok) throw new Error('Failed to notify server');
     }
 
-    /**
-     * Upload a single file
-     */
     async uploadSingleFile(
+        workerId: number,
         batch_uid: string,
-        file: QueuedFile,
+        db_file: QueuedFile,
+        actual_blob: Blob,
         onProgress?: (progress: UploadProgress) => void
     ): Promise<void> {
         try {
-            // Check if network is available
-            if (!navigator.onLine) {
-                throw new Error('Network offline');
-            }
+            if (this.isPaused) throw new Error('Paused');
 
-            // Check if paused
-            if (this.isPaused) {
-                throw new Error('Upload paused');
-            }
+            // 1. Get URL
+            const { upload_url, s3_path } = await this.requestPresignedUrl(batch_uid, db_file.file_name, db_file.file_size);
 
-            // CRITICAL: Validate file blob exists and has content
-            if (!file.file_blob) {
-                throw new Error(`File blob missing for ${file.file_name}`);
-            }
+            // 2. Status -> Uploading
+            await updateFileStatus(batch_uid, db_file.file_name, 'uploading');
 
-            if (file.file_blob.size === 0) {
-                throw new Error(`File blob is empty (0 bytes) for ${file.file_name}`);
-            }
-
-            if (file.file_blob.size !== file.file_size) {
-                console.warn(`File size mismatch: blob=${file.file_blob.size}, metadata=${file.file_size}`);
-            }
-
-            // Update status to uploading
-            if (file.id) {
-                await updateFileStatus(file.id, 'uploading');
-            }
-
-            // Step 1: Request pre-signed URL
-            const { upload_url, s3_path } = await this.requestPresignedUrl(
-                batch_uid,
-                file.file_name,
-                file.file_size
-            );
-
-            // Step 2: Upload to S3
-            await this.uploadToS3(upload_url, file.file_blob, (progress) => {
-                if (file.id) {
-                    updateFileProgress(file.id, progress);
-                }
-                if (onProgress) {
-                    onProgress({
-                        fileId: file.id!,
-                        fileName: file.file_name,
-                        progress,
-                        status: 'uploading'
-                    });
-                }
+            // 3. To S3
+            await this.uploadToS3(batch_uid, db_file.file_name, upload_url, actual_blob, (progress) => {
+                updateFileProgress(batch_uid, db_file.file_name, progress);
+                if (onProgress) onProgress({ fileName: db_file.file_name, progress, status: 'uploading' });
             });
 
-            // Step 3: Notify backend
-            await this.notifyUploadComplete(
-                batch_uid,
-                file.file_name,
-                s3_path,
-                file.file_size
-            );
+            // 4. Status -> Uploaded
+            await updateFileStatus(batch_uid, db_file.file_name, 'uploaded', s3_path);
+            if (onProgress) onProgress({ fileName: db_file.file_name, progress: 100, status: 'uploaded' });
 
-            // Step 4: Update status to uploaded
-            if (file.id) {
-                await updateFileStatus(file.id, 'uploaded', s3_path);
-            }
+            // 5. Notify
+            await this.notifyUploadComplete(batch_uid, db_file.file_name, s3_path, db_file.file_size);
 
-            if (onProgress) {
-                onProgress({
-                    fileId: file.id!,
-                    fileName: file.file_name,
-                    progress: 100,
-                    status: 'uploaded'
-                });
-            }
         } catch (error) {
-            // Update status to failed
-            if (file.id) {
-                await updateFileStatus(
-                    file.id,
-                    'failed',
-                    undefined,
-                    error instanceof Error ? error.message : 'Unknown error'
-                );
-            }
-
-            if (onProgress) {
-                onProgress({
-                    fileId: file.id!,
-                    fileName: file.file_name,
-                    progress: 0,
-                    status: 'failed'
-                });
-            }
-
+            console.error(`[Worker ${workerId}] Error uploading ${db_file.file_name}:`, error);
             throw error;
         }
     }
 
-    /**
-     * Process entire upload queue for a batch using a worker pool for concurrency
-     */
     async processUploadQueue(
         batch_uid: string,
-        fileIds: number[],
+        fileNames: string[],
         onFileProgress?: (progress: UploadProgress) => void,
         onBatchProgress?: (progress: BatchProgress) => void,
         onComplete?: () => void,
         onError?: (error: Error) => void,
-        concurrency: number = 5,
-        filesArray?: File[] // Optional: direct file array for instant access
+        concurrency: number = 8,
+        filesArray?: File[] // These are the files user picked
     ): Promise<void> {
+        const total = fileNames.length;
         let completedCount = 0;
-        let processedCount = 0;
-        const total = fileIds.length;
-        let activeUploads = 0;
-        let currentIndex = 0;
-        let hasErrorOccurred = false;
+        let activeCount = 0;
+        const queue = [...fileNames];
 
-        return new Promise((resolve, reject) => {
-            const startNext = async () => {
-                // Physical Network Kill-Switch
-                if (!navigator.onLine) {
-                    console.warn('📡 Network offline detected. Stopping upload loop.');
-                    this.isPaused = true;
-                    if (onError) onError(new Error('Network offline'));
-                    return;
-                }
-
-                // Check if all files are processed
-                if (processedCount === total) {
-                    if (onComplete) onComplete();
-                    resolve();
-                    return;
-                }
-
-                // Check if paused or error occurred
-                if (this.isPaused || hasErrorOccurred) return;
-
-                // Fill workers up to concurrency limit
-                while (activeUploads < concurrency && currentIndex < total) {
-                    const fileId = fileIds[currentIndex];
-                    currentIndex++;
-                    activeUploads++;
-
-                    // Fetch file: either from memory array or IndexedDB
-                    let file: QueuedFile | undefined;
-
-                    // First, get metadata from IndexedDB
-                    const { db } = await import('./uploadDB');
-                    const metadata = await db.upload_queue.get(fileId);
-
-                    if (!metadata) {
-                        activeUploads--;
-                        processedCount++;
-                        startNext();
-                        continue;
-                    }
-
-                    if (filesArray && filesArray.length > 0) {
-                        // Use direct file access (INSTANT) - MATCH BY FILENAME
-                        const rawFile = filesArray.find(f => f.name === metadata.file_name);
-
-                        if (rawFile) {
-                            file = {
-                                ...metadata,
-                                file_blob: rawFile // Attach the actual file
-                            };
-                        } else {
-                            // File not found in array - fallback to error
-                            console.error(`File not found in array: ${metadata.file_name}`);
-                            activeUploads--;
-                            processedCount++;
-                            startNext();
-                            continue;
-                        }
-                    } else {
-                        // FALLBACK: Files array lost (tab switch) - try to restore from directory handle
-                        console.warn('⚠️ Files array not available - attempting to restore from directory handle');
-
-                        // Get the directory handle from batch queue
-                        const batchInfo = await db.batch_queue.get(batch_uid);
-
-                        if (batchInfo?.directory_handle) {
-                            try {
-                                // Get the file from directory
-                                const fileHandle = await (batchInfo.directory_handle as any).getFileHandle(metadata.file_name);
-                                const rawFile = await fileHandle.getFile();
-
-                                file = {
-                                    ...metadata,
-                                    file_blob: rawFile
-                                };
-
-                                console.log(`✅ Restored file from directory: ${metadata.file_name}`);
-                            } catch (err) {
-                                console.error(`❌ Failed to restore file: ${metadata.file_name}`, err);
-                                activeUploads--;
-                                processedCount++;
-                                startNext();
-                                continue;
-                            }
-                        } else {
-                            console.error('❌ No directory handle available');
-                            activeUploads--;
-                            processedCount++;
-                            startNext();
-                            continue;
-                        }
-                    }
-
-                    if (!file) {
-                        activeUploads--;
-                        processedCount++;
-                        startNext();
-                        continue;
-                    }
-
-                    // Mark as uploading in UI
-                    if (onBatchProgress) {
-                        onBatchProgress({
-                            completed: completedCount,
-                            total,
-                            percentage: Math.round((completedCount / total) * 100),
-                            currentFile: `Uploading ${file.file_name}...`
-                        });
-                    }
-
-                    // Execute upload
-                    this.uploadSingleFile(batch_uid, file, onFileProgress)
-                        .then(() => {
-                            activeUploads--;
-                            completedCount++; // High-Water Mark: Only increment on 200 OK
-                            processedCount++;
-                            startNext(); // Pull next file
-                        })
-                        .catch((err) => {
-                            console.error(`Error uploading ${file.file_name}:`, err);
-                            activeUploads--;
-                            processedCount++;
-                            if (onError) onError(err);
-                            startNext();
-                        });
-                }
-            };
-
-            // Start the first batch of workers
-            startNext();
-        });
-    }
-
-    /**
-     * Pause ongoing uploads
-     */
-    pause(): void {
-        this.isPaused = true;
-        if (this.abortController) {
-            this.abortController.abort();
+        // Create a quick lookup map for the files currently in memory
+        const inMemoryFiles = new Map<string, File>();
+        if (filesArray) {
+            filesArray.forEach(f => inMemoryFiles.set(f.name, f));
         }
-    }
 
-    /**
-     * Resume paused uploads
-     */
-    resume(): void {
-        this.isPaused = false;
-    }
+        console.log(`[Manager] 🚀 Starting queue for ${total} files`);
 
-    /**
-     * Check if uploads are paused
-     */
-    isPausedStatus(): boolean {
-        return this.isPaused;
+        const processNext = async (workerId: number) => {
+            if (this.isPaused || queue.length === 0) return;
+
+            const fileName = queue.shift()!;
+            activeCount++;
+
+            try {
+                // Get metadata from DB
+                const db_file = await db.upload_queue.get([batch_uid, fileName]);
+                if (!db_file) throw new Error(`Metadata missing for ${fileName}`);
+
+                // Get actual content from memory (FAST) or from the user's handle
+                let actual_blob = inMemoryFiles.get(fileName);
+
+                // Fallback: If not in immediate memory, try reading from directory handle
+                if (!actual_blob) {
+                    const batchMeta = await db.batch_queue.get(batch_uid);
+                    if (batchMeta?.directory_handle) {
+                        try {
+                            // Find entry in handle
+                            const entry = await batchMeta.directory_handle.getFileHandle(fileName);
+                            actual_blob = await entry.getFile();
+                        } catch (e) {
+                            console.warn(`Could not read ${fileName} from handle:`, e);
+                        }
+                    }
+                }
+
+                if (!actual_blob) {
+                    throw new Error(`File content not found for ${fileName}. Please reconnect folder.`);
+                }
+
+                await this.uploadSingleFile(workerId, batch_uid, db_file, actual_blob, onFileProgress);
+
+                completedCount++;
+                activeCount--;
+
+                if (onBatchProgress) {
+                    onBatchProgress({
+                        completed: completedCount,
+                        total,
+                        percentage: Math.round((completedCount / total) * 100),
+                        currentFile: fileName
+                    });
+                }
+
+                await processNext(workerId);
+            } catch (err: any) {
+                activeCount--;
+                if (err.message === 'UPLOAD_ABORTED') return;
+
+                if (onError) onError(err);
+
+                if (queue.length > 0) {
+                    await processNext(workerId);
+                }
+            }
+        };
+
+        const workers = [];
+        for (let i = 0; i < Math.min(concurrency, total); i++) {
+            workers.push(processNext(i));
+        }
+
+        await Promise.all(workers);
+
+        if (completedCount === total && onComplete) {
+            onComplete();
+        }
     }
 }
 
-/**
- * Sync with server to get already uploaded files
- */
-export async function syncWithServer(
-    batch_uid: string,
-    token: string
-): Promise<string[]> {
-    const response = await fetch(
-        `${API_BASE_URL}/operator/batches/${batch_uid}/progress`,
-        {
-            headers: {
-                'Authorization': `Bearer ${token}`
-            }
-        }
-    );
-
-    if (!response.ok) {
-        throw new Error('Failed to sync with server');
-    }
-
-    const data = await response.json();
+export async function syncWithServer(batch_uid: string, token: string): Promise<string[]> {
+    const res = await fetch(`${API_BASE_URL}/operator/batches/${batch_uid}/progress`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (!res.ok) throw new Error(`Failed to sync: ${res.status}`);
+    const data = await res.json();
     return data.uploaded_files || [];
 }

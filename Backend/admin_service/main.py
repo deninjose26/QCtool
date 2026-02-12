@@ -5,7 +5,7 @@ from common.database import get_session
 from common.models import (
     Project, UserRole, User, Source, Location, RecordOwner, RecordType,
     Batch, Upload, VendorAllocation, ScanningOperatorAllocation, RecordName,
-    QCAllocation, QCBatchStatus, QC, QCStatus, Image
+    QCAllocation, QCBatchStatus, QC, QCStatus, Image, AuditLog
 )
 from common.auth_utils import role_required, get_current_user
 from datetime import datetime
@@ -46,14 +46,23 @@ def read_root():
 def get_system_setting(
     setting_id: str,
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin]))
+    role: str = Depends(role_required([
+        UserRole.SuperAdmin, 
+        UserRole.Upload_Supervisor, 
+        UserRole.Scanning_Operator
+    ]))
 ):
     from common.models import SystemSettings
     setting = session.get(SystemSettings, setting_id)
     if not setting:
         # Return default if not found
-        if setting_id == "allow_multiple_vendor_allocations":
-             return {"setting_id": setting_id, "setting_value": "false"}
+        defaults = {
+            "allow_multiple_vendor_allocations": "false",
+            "enable_manual_lock_release": "false",
+            "enable_audit_logs": "true"
+        }
+        if setting_id in defaults:
+             return {"setting_id": setting_id, "setting_value": defaults[setting_id]}
         raise HTTPException(status_code=404, detail="Setting not found")
     return setting
 
@@ -62,10 +71,14 @@ def update_system_setting(
     setting_id: str,
     payload: dict,
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin]))
+    role: str = Depends(role_required([UserRole.SuperAdmin])),
+    current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
     from common.models import SystemSettings
     setting = session.get(SystemSettings, setting_id)
+    old_value = setting.setting_value if setting else None
+    
     if not setting:
         setting = SystemSettings(setting_id=setting_id, setting_value=payload.get("value", "false"))
     else:
@@ -75,7 +88,189 @@ def update_system_setting(
     session.add(setting)
     session.commit()
     session.refresh(setting)
+
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="System Setting Changed",
+        endpoint=f"/admin/settings/{setting_id}",
+        method="PUT",
+        payload={
+            "setting_id": setting_id,
+            "old_value": old_value,
+            "new_value": setting.setting_value
+        },
+        result="success"
+    )
+    
     return setting
+
+# --- Audit Logs Management ---
+
+class AuditLogRead(BaseModel):
+    log_id: int
+    user_id: UUID
+    username: str
+    action: str
+    endpoint: Optional[str]
+    method: Optional[str]
+    ip_address: Optional[str]
+    payload: Optional[str]
+    result: Optional[str]
+    timestamp: datetime
+
+@router.get("/audit-logs", response_model=List[AuditLogRead])
+def get_audit_logs(
+    user_filter: Optional[str] = None,
+    action_filter: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = 500,
+    session: Session = Depends(get_session),
+    role: str = Depends(role_required([UserRole.SuperAdmin]))
+):
+    """
+    Fetch audit logs with optional filters
+    """
+    from common.models import SystemSettings, AuditLog
+    
+    # Build query
+    query = select(AuditLog)
+    
+    if user_filter:
+        query = query.where(
+            col(AuditLog.username).ilike(f"%{user_filter}%")
+        )
+    
+    if action_filter:
+        query = query.where(
+            col(AuditLog.action).ilike(f"%{action_filter}%")
+        )
+    
+    if start_date:
+        query = query.where(AuditLog.timestamp >= start_date)
+    
+    if end_date:
+        query = query.where(AuditLog.timestamp <= end_date)
+    
+    query = query.order_by(AuditLog.timestamp.desc()).limit(limit)
+    
+    logs = session.exec(query).all()
+    
+    return logs
+
+@router.get("/audit-logs/export")
+def export_audit_logs(
+    session: Session = Depends(get_session),
+    role: str = Depends(role_required([UserRole.SuperAdmin]))
+):
+    """Export audit logs as CSV for Excel compatibility"""
+    import csv
+    import io
+    from fastapi.responses import StreamingResponse
+    from common.models import AuditLog
+    
+    logs = session.exec(select(AuditLog).order_by(AuditLog.timestamp.desc())).all()
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Headers - NO IP ADDRESS as requested
+    writer.writerow(["Timestamp", "User", "Action", "Method", "Endpoint", "Payload", "Status"])
+    
+    for log in logs:
+        writer.writerow([
+            log.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            log.username,
+            log.action,
+            log.method or "-",
+            log.endpoint or "-",
+            log.payload or "-",
+            log.result
+        ])
+    
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=audit_logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"}
+    )
+
+class ClearLogsRequest(BaseModel):
+    log_ids: Optional[List[int]] = None
+
+@router.delete("/audit-logs/clear")
+def clear_audit_logs(
+    request: ClearLogsRequest = None,
+    session: Session = Depends(get_session),
+    role: str = Depends(role_required([UserRole.SuperAdmin])),
+    current_user: User = Depends(get_current_user)
+):
+    """Clear audit logs from the database (either all or filtered)"""
+    from common.models import AuditLog
+    from sqlalchemy import delete
+    
+    try:
+        stmt = delete(AuditLog)
+        
+        # If specific log_ids are provided, only delete those
+        if request and request.log_ids:
+            stmt = stmt.where(AuditLog.log_id.in_(request.log_ids))
+            action_desc = f"Cleared {len(request.log_ids)} Filtered Audit Logs"
+        else:
+            action_desc = "All Audit Logs Cleared"
+            
+        session.execute(stmt)
+        session.commit()
+        
+        # Log the clearing action itself
+        from common.audit_logger import log_action
+        log_action(
+            session=session,
+            user_id=current_user.user_id,
+            username=current_user.username,
+            action=action_desc,
+            endpoint="/admin/audit-logs/clear",
+            method="DELETE",
+            payload={"cleared_by": current_user.username, "count": len(request.log_ids) if request and request.log_ids else "all"},
+            result="success"
+        )
+        
+        return {"message": action_desc}
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to clear logs: {str(e)}")
+
+@router.get("/audit-logs/stats")
+def get_audit_stats(
+    session: Session = Depends(get_session),
+    role: str = Depends(role_required([UserRole.SuperAdmin]))
+):
+    """
+    Get audit log statistics
+    """
+    from common.models import SystemSettings, AuditLog
+    from sqlalchemy import func as sql_func, cast, Date
+    
+    # Get stats using SQLModel
+    total_logs = session.exec(select(sql_func.count(AuditLog.log_id))).first() or 0
+    unique_users = session.exec(select(sql_func.count(sql_func.distinct(AuditLog.user_id)))).first() or 0
+    unique_actions = session.exec(select(sql_func.count(sql_func.distinct(AuditLog.action)))).first() or 0
+    
+    # Get today's logs
+    logs_today = session.exec(
+        select(sql_func.count(AuditLog.log_id))
+        .where(cast(AuditLog.timestamp, Date) == sql_func.current_date())
+    ).first() or 0
+    
+    return {
+        "total_logs": total_logs,
+        "unique_users": unique_users,
+        "unique_actions": unique_actions,
+        "logs_today": logs_today
+    }
 
 # --- Schemas ---
 class BatchRead(BaseModel):
@@ -132,8 +327,10 @@ class BatchDownloadRequest(BaseModel):
 def create_project(
     project_data: ProjectCreate, 
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin]))
+    role: str = Depends(role_required([UserRole.SuperAdmin])),
+    current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
     # Auto-generate code P001, P002...
     last_project = session.exec(select(Project).order_by(Project.project_code.desc())).first()
     if not last_project:
@@ -150,7 +347,17 @@ def create_project(
     
     # Ensure name is uppercase
     project_name_upper = project_data.project_name.strip().upper()
-    
+
+    # Check for duplicate name
+    existing_project = session.exec(
+        select(Project).where(Project.project_name == project_name_upper)
+    ).first()
+    if existing_project:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Project with name '{project_name_upper}' already exists."
+        )
+
     db_project = Project(
         project_code=project_code,
         project_name=project_name_upper,
@@ -160,6 +367,22 @@ def create_project(
     session.add(db_project)
     session.commit()
     session.refresh(db_project)
+
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Project Created",
+        endpoint="/admin/projects",
+        method="POST",
+        payload={
+            "project_code": project_code,
+            "project_name": project_name_upper
+        },
+        result="success"
+    )
+
     return db_project
 
 @router.get("/projects", response_model=list[Project])
@@ -177,32 +400,87 @@ def update_project(
     project_id: UUID,
     project_data: ProjectUpdate,
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin]))
+    role: str = Depends(role_required([UserRole.SuperAdmin])),
+    current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
     db_project = session.get(Project, project_id)
     if not db_project:
         raise HTTPException(status_code=404, detail="Project not found")
     
-    db_project.project_name = project_data.project_name.strip()
+    old_name = db_project.project_name
+    new_name_upper = project_data.project_name.strip().upper()
+
+    # Check for duplicate name
+    existing_project = session.exec(
+        select(Project)
+        .where(Project.project_name == new_name_upper)
+        .where(Project.project_id != project_id)
+    ).first()
+    if existing_project:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Another project with name '{new_name_upper}' already exists."
+        )
+
+    db_project.project_name = new_name_upper
     db_project.description = project_data.description
     session.add(db_project)
     session.commit()
     session.refresh(db_project)
+
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Project Updated",
+        endpoint=f"/admin/projects/{project_id}",
+        method="PUT",
+        payload={
+            "project_id": str(project_id),
+            "old_name": old_name,
+            "new_name": db_project.project_name
+        },
+        result="success"
+    )
+
     return db_project
 
 @router.delete("/projects/{project_id}")
 def delete_project(
     project_id: UUID,
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin]))
+    role: str = Depends(role_required([UserRole.SuperAdmin])),
+    current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
     db_project = session.get(Project, project_id)
     if not db_project:
         raise HTTPException(status_code=404, detail="Project not found")
     
+    project_name = db_project.project_name
+    project_code = db_project.project_code
+
     try:
         session.delete(db_project)
         session.commit()
+
+        # Log the action
+        log_action(
+            session=session,
+            user_id=current_user.user_id,
+            username=current_user.username,
+            action="Project Deleted",
+            endpoint=f"/admin/projects/{project_id}",
+            method="DELETE",
+            payload={
+                "project_id": str(project_id),
+                "project_name": project_name,
+                "project_code": project_code
+            },
+            result="success"
+        )
     except Exception as e:
         session.rollback()
         # Catch foreign key violations
@@ -232,8 +510,11 @@ class SourceUpdate(BaseModel):
 def create_source(
     source_data: SourceCreate,
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor]))
+    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor])),
+    current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
+    
     # Auto-generate source code (S001, S002...) within the project
     last_source = session.exec(
         select(Source)
@@ -258,7 +539,20 @@ def create_source(
     
     # Ensure name is uppercase
     source_name_upper = source_data.source_name.strip().upper()
-    
+
+    # Check for duplicate name within the project
+    existing_source = session.exec(
+        select(Source).where(
+            Source.source_name == source_name_upper,
+            Source.project_id == source_data.project_id
+        )
+    ).first()
+    if existing_source:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Source with name '{source_name_upper}' already exists in this project."
+        )
+
     db_source = Source(
         project_id=source_data.project_id,
         source_code=source_code,
@@ -268,6 +562,23 @@ def create_source(
     session.add(db_source)
     session.commit()
     session.refresh(db_source)
+    
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Source Created",
+        endpoint="/admin/sources",
+        method="POST",
+        payload={
+            "source_code": source_code,
+            "source_name": source_name_upper,
+            "project_id": str(source_data.project_id)
+        },
+        result="success"
+    )
+    
     return db_source
 
 @router.get("/sources", response_model=list[Source])
@@ -285,31 +596,90 @@ def update_source(
     source_id: UUID,
     source_data: SourceUpdate,
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor]))
+    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor])),
+    current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
     db_source = session.get(Source, source_id)
     if not db_source:
         raise HTTPException(status_code=404, detail="Source not found")
     
-    db_source.source_name = source_data.source_name.strip()
+    old_name = db_source.source_name
+    new_name_upper = source_data.source_name.strip().upper()
+
+    # Check for duplicate name within the project
+    existing_source = session.exec(
+        select(Source)
+        .where(
+            Source.source_name == new_name_upper,
+            Source.project_id == db_source.project_id,
+            Source.source_id != source_id
+        )
+    ).first()
+    if existing_source:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Another source with name '{new_name_upper}' already exists in this project."
+        )
+
+    db_source.source_name = new_name_upper
     session.add(db_source)
     session.commit()
     session.refresh(db_source)
+
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Source Updated",
+        endpoint=f"/admin/sources/{source_id}",
+        method="PUT",
+        payload={
+            "source_id": str(source_id),
+            "source_code": db_source.source_code,
+            "old_name": old_name,
+            "new_name": db_source.source_name
+        },
+        result="success"
+    )
+
     return db_source
 
 @router.delete("/sources/{source_id}")
 def delete_source(
     source_id: UUID,
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor]))
+    role: str = Depends(role_required([UserRole.SuperAdmin])),
+    current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
     db_source = session.get(Source, source_id)
     if not db_source:
         raise HTTPException(status_code=404, detail="Source not found")
     
+    source_name = db_source.source_name
+    source_code = db_source.source_code
+
     try:
         session.delete(db_source)
         session.commit()
+
+        # Log the action
+        log_action(
+            session=session,
+            user_id=current_user.user_id,
+            username=current_user.username,
+            action="Source Deleted",
+            endpoint=f"/admin/sources/{source_id}",
+            method="DELETE",
+            payload={
+                "source_id": str(source_id),
+                "source_name": source_name,
+                "source_code": source_code
+            },
+            result="success"
+        )
     except Exception as e:
         session.rollback()
         if "violates foreign key constraint" in str(e).lower():
@@ -338,8 +708,10 @@ class LocationUpdate(BaseModel):
 def create_location(
     location_data: LocationCreate,
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor]))
+    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor])),
+    current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
     # Auto-generate location code (L001, L002...) within the source
     last_loc = session.exec(
         select(Location)
@@ -360,7 +732,21 @@ def create_location(
 
     location_code = f"L{str(next_num).zfill(3)}"
     location_name_upper = location_data.location_name.strip().upper()
-    
+
+    # Check for duplicate name within the source and project
+    existing_loc = session.exec(
+        select(Location).where(
+            Location.location_name == location_name_upper,
+            Location.source_id == location_data.source_id,
+            Location.project_id == location_data.project_id
+        )
+    ).first()
+    if existing_loc:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Location with name '{location_name_upper}' already exists in this source branch."
+        )
+
     db_loc = Location(
         project_id=location_data.project_id,
         source_id=location_data.source_id,
@@ -371,6 +757,23 @@ def create_location(
     session.add(db_loc)
     session.commit()
     session.refresh(db_loc)
+
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Location Created",
+        endpoint="/admin/locations",
+        method="POST",
+        payload={
+            "location_code": location_code,
+            "location_name": location_name_upper,
+            "source_id": str(location_data.source_id)
+        },
+        result="success"
+    )
+
     return db_loc
 
 @router.get("/locations", response_model=list[Location])
@@ -388,29 +791,91 @@ def update_location(
     location_id: UUID,
     location_data: LocationUpdate,
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor]))
+    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor])),
+    current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
     db_loc = session.get(Location, location_id)
     if not db_loc:
         raise HTTPException(status_code=404, detail="Location not found")
-    db_loc.location_name = location_data.location_name.strip()
+    
+    old_name = db_loc.location_name
+    new_name_upper = location_data.location_name.strip().upper()
+
+    # Check for duplicate name within the project and source
+    existing_loc = session.exec(
+        select(Location)
+        .where(
+            Location.location_name == new_name_upper,
+            Location.source_id == db_loc.source_id,
+            Location.project_id == db_loc.project_id,
+            Location.location_id != location_id
+        )
+    ).first()
+    if existing_loc:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Another location with name '{new_name_upper}' already exists in this source branch."
+        )
+
+    db_loc.location_name = new_name_upper
     session.add(db_loc)
     session.commit()
     session.refresh(db_loc)
+
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Location Updated",
+        endpoint=f"/admin/locations/{location_id}",
+        method="PUT",
+        payload={
+            "location_id": str(location_id),
+            "location_code": db_loc.location_code,
+            "old_name": old_name,
+            "new_name": db_loc.location_name
+        },
+        result="success"
+    )
+
     return db_loc
 
 @router.delete("/locations/{location_id}")
 def delete_location(
     location_id: UUID,
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor]))
+    role: str = Depends(role_required([UserRole.SuperAdmin])),
+    current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
     db_loc = session.get(Location, location_id)
     if not db_loc:
         raise HTTPException(status_code=404, detail="Location not found")
+    
+    location_name = db_loc.location_name
+    location_code = db_loc.location_code
+
     try:
         session.delete(db_loc)
         session.commit()
+
+        # Log the action
+        log_action(
+            session=session,
+            user_id=current_user.user_id,
+            username=current_user.username,
+            action="Location Deleted",
+            endpoint=f"/admin/locations/{location_id}",
+            method="DELETE",
+            payload={
+                "location_id": str(location_id),
+                "location_name": location_name,
+                "location_code": location_code
+            },
+            result="success"
+        )
     except Exception as e:
         session.rollback()
         if "violates foreign key constraint" in str(e).lower():
@@ -440,8 +905,10 @@ class RecordOwnerUpdate(BaseModel):
 def create_record_owner(
     ro_data: RecordOwnerCreate,
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor]))
+    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor])),
+    current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
     # Auto-generate record owner code (R0001, R0002...) within the location
     last_ro = session.exec(
         select(RecordOwner)
@@ -463,7 +930,22 @@ def create_record_owner(
 
     ro_code = f"R{str(next_num).zfill(4)}"
     ro_name_upper = ro_data.record_owner_name.strip().upper()
-    
+
+    # Check for duplicate name within the project, source and location
+    existing_ro = session.exec(
+        select(RecordOwner).where(
+            RecordOwner.record_owner_name == ro_name_upper,
+            RecordOwner.location_id == ro_data.location_id,
+            RecordOwner.source_id == ro_data.source_id,
+            RecordOwner.project_id == ro_data.project_id
+        )
+    ).first()
+    if existing_ro:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Record Owner with name '{ro_name_upper}' already exists in this location branch."
+        )
+
     db_ro = RecordOwner(
         project_id=ro_data.project_id,
         source_id=ro_data.source_id,
@@ -475,6 +957,23 @@ def create_record_owner(
     session.add(db_ro)
     session.commit()
     session.refresh(db_ro)
+
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Record Owner Created",
+        endpoint="/admin/record-owners",
+        method="POST",
+        payload={
+            "record_owner_code": ro_code,
+            "record_owner_name": ro_name_upper,
+            "location_id": str(ro_data.location_id)
+        },
+        result="success"
+    )
+
     return db_ro
 
 @router.get("/record-owners", response_model=list[RecordOwner])
@@ -492,29 +991,92 @@ def update_record_owner(
     ro_id: UUID,
     ro_data: RecordOwnerUpdate,
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor]))
+    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor])),
+    current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
     db_ro = session.get(RecordOwner, ro_id)
     if not db_ro:
         raise HTTPException(status_code=404, detail="Record Owner not found")
-    db_ro.record_owner_name = ro_data.record_owner_name.strip()
+    
+    old_name = db_ro.record_owner_name
+    new_name_upper = ro_data.record_owner_name.strip().upper()
+
+    # Check for duplicate name within the project, source and location
+    existing_ro = session.exec(
+        select(RecordOwner)
+        .where(
+            RecordOwner.record_owner_name == new_name_upper,
+            RecordOwner.location_id == db_ro.location_id,
+            RecordOwner.source_id == db_ro.source_id,
+            RecordOwner.project_id == db_ro.project_id,
+            RecordOwner.record_owner_id != ro_id
+        )
+    ).first()
+    if existing_ro:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Another record owner with name '{new_name_upper}' already exists in this location branch."
+        )
+
+    db_ro.record_owner_name = new_name_upper
     session.add(db_ro)
     session.commit()
     session.refresh(db_ro)
+
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Record Owner Updated",
+        endpoint=f"/admin/record-owners/{ro_id}",
+        method="PUT",
+        payload={
+            "record_owner_id": str(ro_id),
+            "record_owner_code": db_ro.record_owner_code,
+            "old_name": old_name,
+            "new_name": db_ro.record_owner_name
+        },
+        result="success"
+    )
+
     return db_ro
 
 @router.delete("/record-owners/{ro_id}")
 def delete_record_owner(
     ro_id: UUID,
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor]))
+    role: str = Depends(role_required([UserRole.SuperAdmin])),
+    current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
     db_ro = session.get(RecordOwner, ro_id)
     if not db_ro:
         raise HTTPException(status_code=404, detail="Record Owner not found")
+    
+    ro_name = db_ro.record_owner_name
+    ro_code = db_ro.record_owner_code
+
     try:
         session.delete(db_ro)
         session.commit()
+
+        # Log the action
+        log_action(
+            session=session,
+            user_id=current_user.user_id,
+            username=current_user.username,
+            action="Record Owner Deleted",
+            endpoint=f"/admin/record-owners/{ro_id}",
+            method="DELETE",
+            payload={
+                "record_owner_id": str(ro_id),
+                "record_owner_name": ro_name,
+                "record_owner_code": ro_code
+            },
+            result="success"
+        )
     except Exception as e:
         session.rollback()
         if "violates foreign key constraint" in str(e).lower():
@@ -542,8 +1104,10 @@ class RecordTypeUpdate(BaseModel):
 def create_record_type(
     rt_data: RecordTypeCreate,
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor]))
+    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor])),
+    current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
     # Auto-generate record type code (RT001, RT002...) within the source
     last_rt = session.exec(
         select(RecordType)
@@ -564,7 +1128,21 @@ def create_record_type(
 
     rt_code = f"RT{str(next_num).zfill(3)}"
     rt_name_upper = rt_data.record_type_name.strip().upper()
-    
+
+    # Check for duplicate name
+    # Check for duplicate name within the source
+    existing_rt = session.exec(
+        select(RecordType).where(
+            RecordType.record_type_name == rt_name_upper,
+            RecordType.source_id == rt_data.source_id
+        )
+    ).first()
+    if existing_rt:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Record Type with name '{rt_name_upper}' already exists in this source."
+        )
+
     db_rt = RecordType(
         source_id=rt_data.source_id,
         record_type_code=rt_code,
@@ -574,6 +1152,23 @@ def create_record_type(
     session.add(db_rt)
     session.commit()
     session.refresh(db_rt)
+
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Record Type Created",
+        endpoint="/admin/record-types",
+        method="POST",
+        payload={
+            "record_type_code": rt_code,
+            "record_type_name": rt_name_upper,
+            "source_id": str(rt_data.source_id)
+        },
+        result="success"
+    )
+
     return db_rt
 
 @router.get("/record-types", response_model=list[RecordType])
@@ -591,29 +1186,90 @@ def update_record_type(
     rt_id: UUID,
     rt_data: RecordTypeUpdate,
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin]))
+    role: str = Depends(role_required([UserRole.SuperAdmin])),
+    current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
     db_rt = session.get(RecordType, rt_id)
     if not db_rt:
         raise HTTPException(status_code=404, detail="Record Type not found")
-    db_rt.record_type_name = rt_data.record_type_name.strip()
+    
+    old_name = db_rt.record_type_name
+    new_name_upper = rt_data.record_type_name.strip().upper()
+
+    # Check for duplicate name within the source
+    existing_rt = session.exec(
+        select(RecordType)
+        .where(
+            RecordType.record_type_name == new_name_upper,
+            RecordType.source_id == db_rt.source_id,
+            RecordType.record_type_id != rt_id
+        )
+    ).first()
+    if existing_rt:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Another record type with name '{new_name_upper}' already exists in this source."
+        )
+
+    db_rt.record_type_name = new_name_upper
     session.add(db_rt)
     session.commit()
     session.refresh(db_rt)
+
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Record Type Updated",
+        endpoint=f"/admin/record-types/{rt_id}",
+        method="PUT",
+        payload={
+            "record_type_id": str(rt_id),
+            "record_type_code": db_rt.record_type_code,
+            "old_name": old_name,
+            "new_name": db_rt.record_type_name
+        },
+        result="success"
+    )
+
     return db_rt
 
 @router.delete("/record-types/{rt_id}")
 def delete_record_type(
     rt_id: UUID,
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin]))
+    role: str = Depends(role_required([UserRole.SuperAdmin])),
+    current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
     db_rt = session.get(RecordType, rt_id)
     if not db_rt:
         raise HTTPException(status_code=404, detail="Record Type not found")
+    
+    rt_name = db_rt.record_type_name
+    rt_code = db_rt.record_type_code
+
     try:
         session.delete(db_rt)
         session.commit()
+
+        # Log the action
+        log_action(
+            session=session,
+            user_id=current_user.user_id,
+            username=current_user.username,
+            action="Record Type Deleted",
+            endpoint=f"/admin/record-types/{rt_id}",
+            method="DELETE",
+            payload={
+                "record_type_id": str(rt_id),
+                "record_type_name": rt_name,
+                "record_type_code": rt_code
+            },
+            result="success"
+        )
     except Exception as e:
         session.rollback()
         if "violates foreign key constraint" in str(e).lower():
@@ -628,6 +1284,7 @@ def delete_record_type(
 
 class UserUpdate(BaseModel):
     name: str | None = None
+    username: str | None = None
     email: str | None = None
     user_role: UserRole | None = None
     is_active: bool | None = None
@@ -656,6 +1313,7 @@ def update_user(
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
     db_user = session.get(User, user_id)
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -670,26 +1328,85 @@ def update_user(
             detail="You are not authorized to update this user."
         )
 
+    # Capture changes for audit log
+    changes = {}
+
+    if user_data.username:
+        if db_user.username != user_data.username:
+            # Check if username is already taken
+            existing_username = session.exec(
+                select(User).where(User.username == user_data.username).where(User.user_id != user_id)
+            ).first()
+            if existing_username:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"The username '{user_data.username}' is already taken. Please choose another one."
+                )
+            changes["username"] = {"old": db_user.username, "new": user_data.username}
+        db_user.username = user_data.username
+
     if user_data.name:
+        if db_user.name != user_data.name:
+            changes["name"] = {"old": db_user.name, "new": user_data.name}
         db_user.name = user_data.name
     if user_data.email:
+        if db_user.email != user_data.email:
+            # Check if email is already taken by another user
+            existing_email = session.exec(
+                select(User).where(User.email == user_data.email).where(User.user_id != user_id)
+            ).first()
+            if existing_email:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"The email '{user_data.email}' is already registered to another account."
+                )
+            changes["email"] = {"old": db_user.email, "new": user_data.email}
         db_user.email = user_data.email
-    if user_data.user_role and is_admin: # Only admins can change roles
-        if user_data.user_role == UserRole.Scanning_Operator:
-            raise HTTPException(
-                status_code=403, 
-                detail="SuperAdmins are not authorized to assign Scanning Operator roles."
-            )
-        db_user.user_role = user_data.user_role
+    # Role changing is disabled as per user requirement: roles should remain fixed after account creation.
+    # if user_data.user_role and is_admin: # Only admins can change roles
+    #     if user_data.user_role == UserRole.Scanning_Operator:
+    #         raise HTTPException(
+    #             status_code=403, 
+    #             detail="SuperAdmins are not authorized to assign Scanning Operator roles."
+    #         )
+    #     if db_user.user_role != user_data.user_role:
+    #         changes["user_role"] = {"old": db_user.user_role, "new": user_data.user_role}
+    #     db_user.user_role = user_data.user_role
     if user_data.is_active is not None:
+        if db_user.is_active != user_data.is_active:
+            changes["is_active"] = {"old": db_user.is_active, "new": user_data.is_active}
         db_user.is_active = user_data.is_active
     if user_data.password:
-        from common.security import get_password_hash
+        from common.security import get_password_hash, validate_password_strength
+        if not validate_password_strength(user_data.password):
+            raise HTTPException(
+                status_code=400,
+                detail="Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, one digit, and one special character."
+            )
         db_user.password_hash = get_password_hash(user_data.password)
+        changes["password"] = "Updated"
         
     session.add(db_user)
     session.commit()
     session.refresh(db_user)
+
+    # Log the action
+    if changes:
+        log_action(
+            session=session,
+            user_id=current_user.user_id,
+            username=current_user.username,
+            action="User Updated",
+            endpoint=f"/admin/users/{user_id}",
+            method="PUT",
+            payload={
+                "target_user_id": str(user_id),
+                "target_username": db_user.username,
+                "changes": changes
+            },
+            result="success"
+        )
+
     return db_user
 
 @router.delete("/users/{user_id}")
@@ -698,6 +1415,7 @@ def delete_user(
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
     db_user = session.get(User, user_id)
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -713,9 +1431,30 @@ def delete_user(
     if db_user.user_id == current_user.user_id:
         raise HTTPException(status_code=400, detail="Cannot delete your own account.")
     
+    username = db_user.username
+    user_name = db_user.name
+    user_role = db_user.user_role
+
     try:
         session.delete(db_user)
         session.commit()
+
+        # Log the action
+        log_action(
+            session=session,
+            user_id=current_user.user_id,
+            username=current_user.username,
+            action="User Deleted",
+            endpoint=f"/admin/users/{user_id}",
+            method="DELETE",
+            payload={
+                "target_user_id": str(user_id),
+                "target_username": username,
+                "target_name": user_name,
+                "target_role": user_role
+            },
+            result="success"
+        )
     except Exception as e:
         session.rollback()
         if "violates foreign key constraint" in str(e).lower():
@@ -759,6 +1498,9 @@ def list_admin_batches(
     output = []
     for b, s, l, ro, rt, rn, p, u, opt, vnd in results:
         status = 'pending'
+        status_detail = ""
+        replaced_by = None
+        
         if u:
             if u.upload_status == 'Completed':
                 status = 'uploaded'
@@ -769,6 +1511,7 @@ def list_admin_batches(
         if b.is_partial:
             upload_type = "Partial"
         elif b.is_reupload and b.parent_batch_uid:
+            upload_type = "Re-upload"
             status_detail = "Rework Batch"
 
         output.append(BatchRead(
@@ -780,8 +1523,8 @@ def list_admin_batches(
             record_owner_name=ro.record_owner_name,
             record_type_name=rt.record_type_name,
             book_name=rn.record_name,
-            target_count=b.target_count,
-            completed_count=b.completed_count,
+            target_count=b.upload_count,
+            completed_count=u.completed_count if u else 0,
             vendor_name=vnd.name,
             operator_name=opt.name,
             upload_type=upload_type,

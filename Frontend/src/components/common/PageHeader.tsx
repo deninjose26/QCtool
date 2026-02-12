@@ -11,9 +11,10 @@ interface PageHeaderProps {
     icon?: React.ReactNode;
     disabled?: boolean;
   };
+  children?: React.ReactNode;
 }
 
-const PageHeader: React.FC<PageHeaderProps> = ({ title, description, action }) => {
+const PageHeader: React.FC<PageHeaderProps> = ({ title, description, action, children }) => {
   return (
     <div className="page-header flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
       <div>
@@ -26,6 +27,7 @@ const PageHeader: React.FC<PageHeaderProps> = ({ title, description, action }) =
           {action.label}
         </Button>
       )}
+      {children}
     </div>
   );
 };

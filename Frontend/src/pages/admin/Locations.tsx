@@ -201,6 +201,15 @@ const Locations: React.FC = () => {
   };
 
   const handleDelete = async (id: string) => {
+    if (user?.role !== 'SuperAdmin') {
+      toast({
+        title: 'Permission Denied',
+        description: 'Only Admins are permitted to delete records. Please contact Administrator.',
+        variant: 'destructive'
+      });
+      return;
+    }
+
     if (!confirm('Are you sure you want to delete this location?')) return;
 
     try {

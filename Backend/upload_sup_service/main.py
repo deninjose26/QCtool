@@ -67,8 +67,11 @@ class RecordTypeCreate(BaseModel):
 def create_source(
     source_data: SourceCreate,
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor]))
+    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor])),
+    current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
+    
     last_source = session.exec(
         select(Source)
         .where(Source.project_id == source_data.project_id)
@@ -88,7 +91,20 @@ def create_source(
 
     source_code = f"S{str(next_num).zfill(3)}"
     source_name_upper = source_data.source_name.strip().upper()
-    
+
+    # Check for duplicate name within the project
+    existing_source = session.exec(
+         select(Source).where(
+            Source.source_name == source_name_upper,
+            Source.project_id == source_data.project_id
+        )
+    ).first()
+    if existing_source:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Source with name '{source_name_upper}' already exists in this project."
+        )
+
     db_source = Source(
         project_id=source_data.project_id,
         source_code=source_code,
@@ -98,14 +114,34 @@ def create_source(
     session.add(db_source)
     session.commit()
     session.refresh(db_source)
+    
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Source Created",
+        endpoint="/upload-sup/sources",
+        method="POST",
+        payload={
+            "source_code": source_code,
+            "source_name": source_name_upper,
+            "project_id": str(source_data.project_id)
+        },
+        result="success"
+    )
+    
     return db_source
 
 @router.post("/locations", response_model=Location)
 def create_location(
     location_data: LocationCreate,
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor]))
+    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor])),
+    current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
+    
     last_loc = session.exec(
         select(Location)
         .where(Location.source_id == location_data.source_id)
@@ -125,7 +161,21 @@ def create_location(
 
     location_code = f"L{str(next_num).zfill(3)}"
     location_name_upper = location_data.location_name.strip().upper()
-    
+
+    # Check for duplicate name within the source and project
+    existing_loc = session.exec(
+         select(Location).where(
+            Location.location_name == location_name_upper,
+            Location.source_id == location_data.source_id,
+            Location.project_id == location_data.project_id
+        )
+    ).first()
+    if existing_loc:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Location with name '{location_name_upper}' already exists in this source branch."
+        )
+
     db_loc = Location(
         project_id=location_data.project_id,
         source_id=location_data.source_id,
@@ -136,14 +186,34 @@ def create_location(
     session.add(db_loc)
     session.commit()
     session.refresh(db_loc)
+    
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Location Created",
+        endpoint="/upload-sup/locations",
+        method="POST",
+        payload={
+            "location_code": location_code,
+            "location_name": location_name_upper,
+            "source_id": str(location_data.source_id)
+        },
+        result="success"
+    )
+    
     return db_loc
 
 @router.post("/record-owners", response_model=RecordOwner)
 def create_record_owner(
     ro_data: RecordOwnerCreate,
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor]))
+    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor])),
+    current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
+    
     last_ro = session.exec(
         select(RecordOwner)
         .where(RecordOwner.location_id == ro_data.location_id)
@@ -163,7 +233,22 @@ def create_record_owner(
 
     ro_code = f"R{str(next_num).zfill(4)}"
     ro_name_upper = ro_data.record_owner_name.strip().upper()
-    
+
+    # Check for duplicate name within the project, source and location
+    existing_ro = session.exec(
+         select(RecordOwner).where(
+            RecordOwner.record_owner_name == ro_name_upper,
+            RecordOwner.location_id == ro_data.location_id,
+            RecordOwner.source_id == ro_data.source_id,
+            RecordOwner.project_id == ro_data.project_id
+        )
+    ).first()
+    if existing_ro:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Record Owner with name '{ro_name_upper}' already exists in this location branch."
+        )
+
     db_ro = RecordOwner(
         project_id=ro_data.project_id,
         source_id=ro_data.source_id,
@@ -175,14 +260,34 @@ def create_record_owner(
     session.add(db_ro)
     session.commit()
     session.refresh(db_ro)
+    
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Record Owner Created",
+        endpoint="/upload-sup/record-owners",
+        method="POST",
+        payload={
+            "record_owner_code": ro_code,
+            "record_owner_name": ro_name_upper,
+            "location_id": str(ro_data.location_id)
+        },
+        result="success"
+    )
+    
     return db_ro
 
 @router.post("/record-types", response_model=RecordType)
 def create_record_type(
     rt_data: RecordTypeCreate,
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor]))
+    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor])),
+    current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
+    
     last_rt = session.exec(
         select(RecordType)
         .where(RecordType.source_id == rt_data.source_id)
@@ -202,7 +307,20 @@ def create_record_type(
 
     rt_code = f"RT{str(next_num).zfill(3)}"
     rt_name_upper = rt_data.record_type_name.strip().upper()
-    
+
+    # Check for duplicate name within the source
+    existing_rt = session.exec(
+         select(RecordType).where(
+            RecordType.record_type_name == rt_name_upper,
+            RecordType.source_id == rt_data.source_id
+        )
+    ).first()
+    if existing_rt:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Record Type with name '{rt_name_upper}' already exists in this source."
+        )
+
     db_rt = RecordType(
         source_id=rt_data.source_id,
         record_type_code=rt_code,
@@ -212,6 +330,23 @@ def create_record_type(
     session.add(db_rt)
     session.commit()
     session.refresh(db_rt)
+    
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Record Type Created",
+        endpoint="/upload-sup/record-types",
+        method="POST",
+        payload={
+            "record_type_code": rt_code,
+            "record_type_name": rt_name_upper,
+            "source_id": str(rt_data.source_id)
+        },
+        result="success"
+    )
+    
     return db_rt
 
 # --- Vendor Allocation ---
@@ -238,8 +373,11 @@ class VendorAllocationUpdate(BaseModel):
 def create_allocation(
     alloc_data: VendorAllocationCreate,
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor]))
+    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor])),
+    current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
+    
     # Check if this active combination is already allocated
     # Provision: Admin can toggle if multiple vendors are allowed for same combination
     from common.models import SystemSettings
@@ -279,6 +417,27 @@ def create_allocation(
     session.add(db_alloc)
     session.commit()
     session.refresh(db_alloc)
+    
+    # Get vendor name for audit log
+    vendor = session.get(User, alloc_data.allocated_to_vendor)
+    vendor_name = vendor.name if vendor else "Unknown"
+    
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Vendor Allocated",
+        endpoint="/upload-sup/allocations",
+        method="POST",
+        payload={
+            "vendor_name": vendor_name,
+            "vendor_id": str(alloc_data.allocated_to_vendor),
+            "record_owner_id": str(alloc_data.record_owner_id)
+        },
+        result="success"
+    )
+    
     return db_alloc
 
 @router.get("/allocations", response_model=list[VendorAllocation])
@@ -294,39 +453,99 @@ def update_allocation(
     alloc_id: UUID,
     alloc_data: VendorAllocationUpdate,
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor]))
+    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor])),
+    current_user: User = Depends(get_current_user)
 ):
+    from common.audit_logger import log_action
     db_alloc = session.get(VendorAllocation, alloc_id)
     if not db_alloc:
         raise HTTPException(status_code=404, detail="Allocation not found")
     
-    if alloc_data.project_id: db_alloc.project_id = alloc_data.project_id
-    if alloc_data.source_id: db_alloc.source_id = alloc_data.source_id
-    if alloc_data.location_id: db_alloc.location_id = alloc_data.location_id
-    if alloc_data.record_owner_id: db_alloc.record_owner_id = alloc_data.record_owner_id
-    if alloc_data.allocated_to_vendor: db_alloc.allocated_to_vendor = alloc_data.allocated_to_vendor
-    if alloc_data.is_active is not None: db_alloc.is_active = alloc_data.is_active
+    changes = {}
+
+    if alloc_data.project_id:
+        # For simplicity, we just log that IDs changed, or we could fetch names
+        if db_alloc.project_id != alloc_data.project_id:
+            changes["project_id"] = {"old": str(db_alloc.project_id), "new": str(alloc_data.project_id)}
+        db_alloc.project_id = alloc_data.project_id
+    if alloc_data.source_id:
+        if db_alloc.source_id != alloc_data.source_id:
+            changes["source_id"] = {"old": str(db_alloc.source_id), "new": str(alloc_data.source_id)}
+        db_alloc.source_id = alloc_data.source_id
+    if alloc_data.location_id:
+        if db_alloc.location_id != alloc_data.location_id:
+            changes["location_id"] = {"old": str(db_alloc.location_id), "new": str(alloc_data.location_id)}
+        db_alloc.location_id = alloc_data.location_id
+    if alloc_data.record_owner_id:
+        if db_alloc.record_owner_id != alloc_data.record_owner_id:
+            changes["record_owner_id"] = {"old": str(db_alloc.record_owner_id), "new": str(alloc_data.record_owner_id)}
+        db_alloc.record_owner_id = alloc_data.record_owner_id
+    if alloc_data.allocated_to_vendor:
+        if db_alloc.allocated_to_vendor != alloc_data.allocated_to_vendor:
+            changes["allocated_to_vendor"] = {"old": str(db_alloc.allocated_to_vendor), "new": str(alloc_data.allocated_to_vendor)}
+        db_alloc.allocated_to_vendor = alloc_data.allocated_to_vendor
+    if alloc_data.is_active is not None:
+        if db_alloc.is_active != alloc_data.is_active:
+            changes["is_active"] = {"old": db_alloc.is_active, "new": alloc_data.is_active}
+        db_alloc.is_active = alloc_data.is_active
     
     db_alloc.last_updated = get_ist_now()
     session.add(db_alloc)
     session.commit()
     session.refresh(db_alloc)
+
+    # Log the action
+    if changes:
+        log_action(
+            session=session,
+            user_id=current_user.user_id,
+            username=current_user.username,
+            action="Vendor Allocation Updated",
+            endpoint=f"/upload-sup/allocations/{alloc_id}",
+            method="PUT",
+            payload={
+                "allocation_id": str(alloc_id),
+                "changes": changes
+            },
+            result="success"
+        )
+
     return db_alloc
 
 @router.delete("/allocations/{alloc_id}")
 def delete_allocation(
     alloc_id: UUID,
     session: Session = Depends(get_session),
-    role: str = Depends(role_required([UserRole.SuperAdmin, UserRole.Upload_Supervisor]))
+    role: str = Depends(role_required([UserRole.SuperAdmin])),
+    current_user: User = Depends(get_current_user)
 ):
     # Deletion is still available for SuperAdmins if needed, 
     # but we will emphasize 'is_active' toggle in UI
+    from common.audit_logger import log_action
     db_alloc = session.get(VendorAllocation, alloc_id)
     if not db_alloc:
         raise HTTPException(status_code=404, detail="Allocation not found")
     
+    vendor_id = db_alloc.allocated_to_vendor
+
     session.delete(db_alloc)
     session.commit()
+
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Vendor Allocation Deleted",
+        endpoint=f"/upload-sup/allocations/{alloc_id}",
+        method="DELETE",
+        payload={
+            "allocation_id": str(alloc_id),
+            "vendor_id": str(vendor_id)
+        },
+        result="success"
+    )
+    
     return {"ok": True}
 
 # Include the router in the app
@@ -390,7 +609,7 @@ def list_sup_batches(
             record_owner_name=ro.record_owner_name,
             record_type_name=rt.record_type_name,
             book_name=rn.record_name,
-            target_count=b.total_count,
+            target_count=b.upload_count,
             completed_count=u.completed_count if u else 0,
             vendor_name=vnd.name,
             operator_name=opt.name,

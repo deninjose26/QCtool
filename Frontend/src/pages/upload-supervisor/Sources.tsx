@@ -198,6 +198,15 @@ const Sources: React.FC = () => {
     };
 
     const handleDelete = async (id: string) => {
+        if (user?.role !== 'SuperAdmin') {
+            toast({
+                title: 'Permission Denied',
+                description: 'Only Admins are permitted to delete records. Please contact Administrator.',
+                variant: 'destructive'
+            });
+            return;
+        }
+
         if (!confirm('Are you sure you want to delete this source?')) return;
         try {
             const response = await fetch(`${API_BASE_URL}/admin/sources/${id}`, {
@@ -213,6 +222,7 @@ const Sources: React.FC = () => {
             }
         } catch (error) {
             console.error('Delete source error:', error);
+            toast({ title: 'Error', description: 'An unexpected error occurred', variant: 'destructive' });
         }
     };
 
@@ -258,7 +268,7 @@ const Sources: React.FC = () => {
     return (
         <div className="space-y-6 animate-fade-in">
             <PageHeader
-                title="Sources (Upload Manager)"
+                title="Sources"
                 description="Manage document sources for assigned projects"
                 action={{ label: 'Add Source', onClick: handleCreate }}
             />

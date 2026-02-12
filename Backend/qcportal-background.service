@@ -1,0 +1,16 @@
+[Unit]
+Description=QC Portal Background Services (Scheduler & Recovery)
+After=network.target qcportal-backend.service
+
+[Service]
+Type=simple
+User=qctool
+WorkingDirectory=/home/qctool/familyaconnect_QCPORTAL/Backend
+Environment="PATH=/home/qctool/familyaconnect_QCPORTAL/Backend/.venv/bin"
+Environment="ENVIRONMENT=production"
+ExecStart=/home/qctool/familyaconnect_QCPORTAL/Backend/.venv/bin/python background_services.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

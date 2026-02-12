@@ -23,11 +23,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Edit, Trash2, Loader2, Eye, EyeOff } from 'lucide-react';
+import { Edit, Trash2, Loader2, Eye, EyeOff, Filter, X, Search } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { formatError } from '@/lib/utils';
 import { formatToLocalTime } from '@/utils/dateUtils';
+import PasswordStrength from '@/components/common/PasswordStrength';
 
 const backendRoleMap: Record<string, string> = {
   super_admin: 'SuperAdmin',
@@ -52,7 +53,36 @@ const Users: React.FC = () => {
     role: 'Upload_Supervisor' as UserRole
   });
   const [showPassword, setShowPassword] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [roleFilter, setRoleFilter] = useState<string>('all');
+  const [creatorFilter, setCreatorFilter] = useState<string>('all');
   const { toast } = useToast();
+
+  const uniqueCreators = React.useMemo(() => {
+    const creatorIds = Array.from(new Set(users.map(u => u.createdBy).filter(Boolean)));
+    return creatorIds.map(id => {
+      const creator = users.find(u => u.id === id);
+      return { id, name: creator ? creator.name : 'System' };
+    }).sort((a, b) => a.name.localeCompare(b.name));
+  }, [users]);
+
+  const filteredUsers = React.useMemo(() => {
+    return users.filter(user => {
+      // Role & Creator Filtering
+      const matchesRole = roleFilter === 'all' || user.role === roleFilter;
+      const userCreator = user.createdBy || 'none';
+      const matchesCreator = creatorFilter === 'all' || userCreator === creatorFilter;
+
+      // Search Filtering
+      const searchStr = searchTerm.toLowerCase();
+      const matchesSearch = !searchTerm ||
+        user.name.toLowerCase().includes(searchStr) ||
+        user.username.toLowerCase().includes(searchStr) ||
+        user.email.toLowerCase().includes(searchStr);
+
+      return matchesRole && matchesCreator && matchesSearch;
+    });
+  }, [users, roleFilter, creatorFilter, searchTerm]);
 
   const fetchUsers = async () => {
     try {
@@ -112,6 +142,18 @@ const Users: React.FC = () => {
       return;
     }
 
+    if (!editingUser || formData.password) {
+      const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?\":{}|<>]).{8,}$/;
+      if (!passwordRegex.test(formData.password)) {
+        toast({
+          title: 'Weak Password',
+          description: 'Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, one digit, and one special character.',
+          variant: 'destructive'
+        });
+        return;
+      }
+    }
+
     try {
       if (editingUser) {
         const response = await fetch(`${API_BASE_URL}/admin/users/${editingUser.id}`, {
@@ -139,7 +181,8 @@ const Users: React.FC = () => {
         const response = await fetch(`${API_BASE_URL}/auth/register`, {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('qc_token')}`
           },
           body: JSON.stringify({
             name: formData.name,
@@ -167,6 +210,15 @@ const Users: React.FC = () => {
   };
 
   const handleDelete = async (id: string) => {
+    if (currentUser?.role !== 'SuperAdmin') {
+      toast({
+        title: 'Permission Denied',
+        description: 'Only Admins are permitted to delete records. Please contact Administrator.',
+        variant: 'destructive'
+      });
+      return;
+    }
+
     if (id === currentUser?.id) {
       toast({ title: 'Error', description: 'You cannot delete your own account', variant: 'destructive' });
       return;
@@ -237,11 +289,9 @@ const Users: React.FC = () => {
           <Button variant="ghost" size="icon" onClick={() => handleEdit(item)}>
             <Edit className="h-4 w-4" />
           </Button>
-          {item.id !== currentUser?.id && item.role !== 'SuperAdmin' && (
-            <Button variant="ghost" size="icon" onClick={() => handleDelete(item.id)}>
-              <Trash2 className="h-4 w-4 text-destructive" />
-            </Button>
-          )}
+          <Button variant="ghost" size="icon" onClick={() => handleDelete(item.id)}>
+            <Trash2 className="h-4 w-4 text-destructive" />
+          </Button>
         </div>
       )
     }
@@ -255,6 +305,76 @@ const Users: React.FC = () => {
         action={{ label: 'Add User', onClick: handleCreate }}
       />
 
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-4 bg-white rounded-xl border border-slate-200 shadow-sm">
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+          <Input
+            placeholder="Search by name, username or email..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="pl-9 h-10 bg-slate-50/50 border-slate-200 focus:bg-white transition-all"
+          />
+          {searchTerm && (
+            <button
+              onClick={() => setSearchTerm('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 rounded-lg border border-slate-100">
+            <Filter className="h-3.5 w-3.5 text-slate-500" />
+            <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Filters</span>
+          </div>
+
+          <div className="w-40">
+            <Select value={roleFilter} onValueChange={setRoleFilter}>
+              <SelectTrigger className="h-10 bg-white">
+                <SelectValue placeholder="All Roles" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Roles</SelectItem>
+                {Object.entries(roleLabels).map(([role, label]) => (
+                  <SelectItem key={role} value={role}>{label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="w-40">
+            <Select value={creatorFilter} onValueChange={setCreatorFilter}>
+              <SelectTrigger className="h-10 bg-white">
+                <SelectValue placeholder="All Creators" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Creators</SelectItem>
+                <SelectItem value="none">System</SelectItem>
+                {uniqueCreators.map((creator) => (
+                  <SelectItem key={creator.id} value={creator.id || 'none'}>
+                    {creator.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {(roleFilter !== 'all' || creatorFilter !== 'all' || searchTerm !== '') && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => { setRoleFilter('all'); setCreatorFilter('all'); setSearchTerm(''); }}
+              className="h-10 px-3 text-xs font-bold text-destructive hover:text-destructive hover:bg-destructive/5"
+            >
+              <X className="h-4 w-4 mr-1.5" />
+              RESET
+            </Button>
+          )}
+        </div>
+      </div>
+
       {isLoading ? (
         <div className="flex flex-col items-center justify-center h-64 space-y-4">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -262,9 +382,10 @@ const Users: React.FC = () => {
         </div>
       ) : (
         <DataTable
-          data={users}
+          data={filteredUsers}
           columns={columns}
-          searchPlaceholder="Search users..."
+          searchable={false}
+          emptyMessage={searchTerm || roleFilter !== 'all' || creatorFilter !== 'all' ? "No users match your filters" : "No users found"}
         />
       )}
 
@@ -304,6 +425,7 @@ const Users: React.FC = () => {
                   onChange={(e) => setFormData({ ...formData, username: e.target.value })}
                   placeholder="e.g., jsmith"
                   disabled={!!editingUser}
+                  autoComplete="off"
                 />
               </div>
               <div className="space-y-2">
@@ -316,6 +438,7 @@ const Users: React.FC = () => {
                     onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                     placeholder={editingUser ? "Leave blank to keep same" : "••••••••"}
                     className="pr-10"
+                    autoComplete="new-password"
                   />
                   <Button
                     type="button"
@@ -333,10 +456,15 @@ const Users: React.FC = () => {
                 </div>
               </div>
             </div>
+            <PasswordStrength password={formData.password} />
             <div className="space-y-2">
               <Label htmlFor="role">Role</Label>
-              <Select value={formData.role} onValueChange={(v) => setFormData({ ...formData, role: v as UserRole })}>
-                <SelectTrigger>
+              <Select
+                value={formData.role}
+                onValueChange={(v) => setFormData({ ...formData, role: v as UserRole })}
+                disabled={!!editingUser}
+              >
+                <SelectTrigger className={!!editingUser ? "bg-slate-50 opacity-100 cursor-not-allowed" : ""}>
                   <SelectValue placeholder="Select role" />
                 </SelectTrigger>
                 <SelectContent>
@@ -345,6 +473,11 @@ const Users: React.FC = () => {
                   ))}
                 </SelectContent>
               </Select>
+              {!!editingUser && (
+                <p className="text-[10px] text-slate-500 font-medium italic">
+                  Roles cannot be changed after account creation.
+                </p>
+              )}
             </div>
           </div>
           <DialogFooter>

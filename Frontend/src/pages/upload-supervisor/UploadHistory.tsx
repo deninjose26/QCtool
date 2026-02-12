@@ -76,6 +76,7 @@ const SupervisorUploadHistory: React.FC = () => {
     const [bookFilter, setBookFilter] = useState<string>('all');
     const [uploadTypeFilter, setUploadTypeFilter] = useState<string>('all');
     const [dateRange, setDateRange] = useState<DateRange | undefined>();
+    const [isExporting, setIsExporting] = useState(false);
 
     // Derived Filter Options
     const projects = Array.from(new Set(batches.map(b => b.project_name))).sort();
@@ -157,38 +158,47 @@ const SupervisorUploadHistory: React.FC = () => {
         setFilteredBatches(result);
     }, [batches, searchTerm, projectFilter, sourceFilter, vendorFilter, operatorFilter, locationFilter, ownerFilter, typeFilter, bookFilter, uploadTypeFilter, dateRange]);
 
-    const handleExport = () => {
-        const exportData = filteredBatches.map(b => ({
-            batch_id: b.batch_id,
-            project: b.project_name,
-            source: b.source_name,
-            vendor: b.vendor_name,
-            operator: b.operator_name,
-            location: b.location_name,
-            owner: b.record_owner_name,
-            record_type: b.record_type_name,
-            upload_type: b.upload_type,
-            book: b.book_name,
-            images: b.completed_count,
-            completed_at: formatToLocalTime(b.upload_end_date)
-        }));
+    const handleExport = async () => {
+        try {
+            setIsExporting(true);
+            await new Promise(resolve => setTimeout(resolve, 800));
+            const exportData = filteredBatches.map(b => ({
+                batch_id: b.batch_id,
+                project: b.project_name,
+                source: b.source_name,
+                vendor: b.vendor_name,
+                operator: b.operator_name,
+                location: b.location_name,
+                owner: b.record_owner_name,
+                record_type: b.record_type_name,
+                upload_type: b.upload_type,
+                book: b.book_name,
+                images: b.completed_count,
+                completed_at: formatToLocalTime(b.upload_end_date)
+            }));
 
-        const headers = {
-            batch_id: 'Batch ID',
-            project: 'Project',
-            source: 'Source',
-            vendor: 'Vendor',
-            operator: 'Operator',
-            location: 'Location',
-            owner: 'Record Owner',
-            record_type: 'Record Type',
-            upload_type: 'Upload Type',
-            book: 'Book Name',
-            images: 'Total Images',
-            completed_at: 'Completion Date'
-        };
+            const headers = {
+                batch_id: 'Batch ID',
+                project: 'Project',
+                source: 'Source',
+                vendor: 'Vendor',
+                operator: 'Operator',
+                location: 'Location',
+                owner: 'Record Owner',
+                record_type: 'Record Type',
+                upload_type: 'Upload Type',
+                book: 'Book Name',
+                images: 'Total Images',
+                completed_at: 'Completion Date'
+            };
 
-        exportToExcel(exportData, 'Supervisor_Upload_History', headers);
+            exportToExcel(exportData, 'Supervisor_Upload_History', headers);
+            toast({ title: 'Export Success', description: `Successfully exported ${filteredBatches.length} records.` });
+        } catch (error) {
+            toast({ title: 'Export Failed', description: 'Could not generate report.', variant: 'destructive' });
+        } finally {
+            setIsExporting(false);
+        }
     };
 
     const resetFilters = () => {
@@ -206,6 +216,21 @@ const SupervisorUploadHistory: React.FC = () => {
     };
 
     const columns = [
+        {
+            key: 'batch_id',
+            header: 'Batch ID',
+            sortable: true,
+            render: (val: string, item: SupBatch) => (
+                <code className={cn(
+                    "text-xs font-bold px-1.5 py-0.5 rounded shadow-sm",
+                    item.upload_type === 'Complete' ? "text-emerald-700 bg-emerald-50 border border-emerald-100/50" :
+                        item.upload_type === 'Partial' ? "text-blue-700 bg-blue-50 border border-blue-100/50" :
+                            "text-amber-700 bg-amber-50 border border-amber-100/50"
+                )}>
+                    {val}
+                </code>
+            )
+        },
         {
             key: 'project_name',
             header: 'Project',
@@ -242,21 +267,6 @@ const SupervisorUploadHistory: React.FC = () => {
             sortable: true,
             render: (val: string) => <span className="text-[10px] font-black text-slate-700 max-w-[120px] truncate block" title={val}>{val}</span>
         },
-        {
-            key: 'batch_id',
-            header: 'Batch ID',
-            sortable: true,
-            render: (val: string, item: SupBatch) => (
-                <code className={cn(
-                    "text-xs font-bold px-1.5 py-0.5 rounded shadow-sm",
-                    item.upload_type === 'Complete' ? "text-emerald-700 bg-emerald-50 border border-emerald-100/50" :
-                        item.upload_type === 'Partial' ? "text-blue-700 bg-blue-50 border border-blue-100/50" :
-                            "text-amber-700 bg-amber-50 border border-amber-100/50"
-                )}>
-                    {val}
-                </code>
-            )
-        },
         { key: 'vendor_name', header: 'Vendor', sortable: true },
         { key: 'operator_name', header: 'Operator', sortable: true },
         {
@@ -273,7 +283,6 @@ const SupervisorUploadHistory: React.FC = () => {
                 </Badge>
             )
         },
-        { key: 'book_name', header: 'Book' },
         {
             key: 'count',
             header: 'Images',
@@ -312,8 +321,20 @@ const SupervisorUploadHistory: React.FC = () => {
         <div className="space-y-4 animate-fade-in">
             <div className="flex items-center justify-between">
                 <PageHeader title="Upload Manager History" description="Global monitor for all vendor uploads and batch status" />
-                <Button onClick={handleExport} disabled={filteredBatches.length === 0} className="gap-2 bg-green-600 hover:bg-green-700">
-                    <Download className="h-4 w-4" /> Export All
+                <Button
+                    variant="ghost"
+                    size="sm"
+                    className={cn(
+                        "text-white h-9 font-semibold text-xs gap-2 shadow-sm border-none transition-all px-4",
+                        filteredBatches.length > 0
+                            ? "bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20"
+                            : "bg-slate-300 text-slate-500 cursor-not-allowed"
+                    )}
+                    onClick={handleExport}
+                    disabled={isExporting || filteredBatches.length === 0}
+                >
+                    {isExporting ? <Loader2 className="h-4 w-4 animate-spin text-white" /> : <Download className="h-4 w-4" />}
+                    Export to Excel
                 </Button>
             </div>
 

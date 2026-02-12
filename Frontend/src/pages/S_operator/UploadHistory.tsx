@@ -75,6 +75,7 @@ const OperatorUploadHistory: React.FC = () => {
     const [uploadTypeFilter, setUploadTypeFilter] = useState<string>('all');
     const [bookFilter, setBookFilter] = useState<string>('all');
     const [dateRange, setDateRange] = useState<DateRange | undefined>();
+    const [isExporting, setIsExporting] = useState(false);
 
     // Derived Filter Options
     const projects = Array.from(new Set(batches.map(b => b.project_name))).sort();
@@ -150,34 +151,43 @@ const OperatorUploadHistory: React.FC = () => {
         setFilteredBatches(result);
     }, [batches, searchTerm, projectFilter, sourceFilter, locationFilter, ownerFilter, typeFilter, bookFilter, uploadTypeFilter, dateRange]);
 
-    const handleExport = () => {
-        const exportData = filteredBatches.map(b => ({
-            batch_id: b.batch_id,
-            project: b.project_name,
-            source: b.source_name,
-            location: b.location_name,
-            owner: b.record_owner_name,
-            record_type: b.record_type_name,
-            upload_type: b.upload_type,
-            book: b.book_name,
-            images: b.completed_count,
-            completed_at: formatToLocalTime(b.upload_end_date)
-        }));
+    const handleExport = async () => {
+        try {
+            setIsExporting(true);
+            await new Promise(resolve => setTimeout(resolve, 800));
+            const exportData = filteredBatches.map(b => ({
+                batch_id: b.batch_id,
+                project: b.project_name,
+                source: b.source_name,
+                location: b.location_name,
+                owner: b.record_owner_name,
+                record_type: b.record_type_name,
+                upload_type: b.upload_type,
+                book: b.book_name,
+                images: b.completed_count,
+                completed_at: formatToLocalTime(b.upload_end_date)
+            }));
 
-        const headers = {
-            batch_id: 'Batch ID',
-            project: 'Project',
-            source: 'Source',
-            location: 'Location',
-            owner: 'Record Owner',
-            record_type: 'Record Type',
-            upload_type: 'Upload Type',
-            book: 'Book Name',
-            images: 'Total Images',
-            completed_at: 'Completion Date'
-        };
+            const headers = {
+                batch_id: 'Batch ID',
+                project: 'Project',
+                source: 'Source',
+                location: 'Location',
+                owner: 'Record Owner',
+                record_type: 'Record Type',
+                upload_type: 'Upload Type',
+                book: 'Book Name',
+                images: 'Total Images',
+                completed_at: 'Completion Date'
+            };
 
-        exportToExcel(exportData, 'Operator_Upload_History', headers);
+            exportToExcel(exportData, 'Operator_Upload_History', headers);
+            toast({ title: 'Export Success', description: `Successfully exported ${filteredBatches.length} records.` });
+        } catch (error) {
+            toast({ title: 'Export Failed', description: 'Could not generate report.', variant: 'destructive' });
+        } finally {
+            setIsExporting(false);
+        }
     };
 
     const resetFilters = () => {
@@ -308,11 +318,18 @@ const OperatorUploadHistory: React.FC = () => {
                     description="Review all batches you have successfully uploaded"
                 />
                 <Button
+                    variant="ghost"
+                    size="sm"
+                    className={cn(
+                        "text-white h-9 font-semibold text-xs gap-2 shadow-sm border-none transition-all px-4",
+                        filteredBatches.length > 0
+                            ? "bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20"
+                            : "bg-slate-300 text-slate-500 cursor-not-allowed"
+                    )}
                     onClick={handleExport}
-                    disabled={filteredBatches.length === 0}
-                    className="bg-green-600 hover:bg-green-700 shadow-lg shadow-green-600/20 gap-2"
+                    disabled={isExporting || filteredBatches.length === 0}
                 >
-                    <Download className="h-4 w-4" />
+                    {isExporting ? <Loader2 className="h-4 w-4 animate-spin text-white" /> : <Download className="h-4 w-4" />}
                     Export to Excel
                 </Button>
             </div>
@@ -361,13 +378,30 @@ const OperatorUploadHistory: React.FC = () => {
                             </div>
 
                             <Button
-                                variant="outline"
+                                variant="ghost"
+                                size="sm"
                                 onClick={fetchHistory}
                                 disabled={isLoading}
-                                className="h-11 px-4 gap-2 border-slate-200 rounded-xl hover:bg-slate-50 text-slate-600 font-bold text-xs uppercase tracking-wider"
+                                className="h-11 px-4 gap-2 bg-slate-50 border border-slate-200 rounded-xl hover:bg-slate-100 text-slate-600 font-bold text-xs uppercase tracking-wider"
                             >
                                 <RefreshCcw className={cn("h-3.5 w-3.5", isLoading && "animate-spin")} />
                                 Refresh
+                            </Button>
+
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className={cn(
+                                    "h-11 px-4 gap-2 rounded-xl font-bold text-xs uppercase tracking-wider transition-all",
+                                    filteredBatches.length > 0
+                                        ? "bg-emerald-600/10 border-emerald-600/20 text-emerald-700 hover:bg-emerald-600/20"
+                                        : "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed"
+                                )}
+                                onClick={handleExport}
+                                disabled={isExporting || filteredBatches.length === 0}
+                            >
+                                {isExporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                                Export
                             </Button>
 
                             {(searchTerm || projectFilter !== 'all' || sourceFilter !== 'all' || locationFilter !== 'all' || ownerFilter !== 'all' || typeFilter !== 'all' || bookFilter !== 'all' || uploadTypeFilter !== 'all' || dateRange) && (

@@ -27,6 +27,7 @@ import Users from "./pages/admin/Users";
 import AdminUploadHistory from "./pages/admin/UploadHistory";
 import AdminQCHistory from "./pages/admin/QCHistory";
 import AcceptedBatches from "./pages/admin/AcceptedBatches";
+import AuditLogs from "./pages/admin/AuditLogs";
 
 // Upload Supervisor Pages
 import Vendors from "@/pages/upload-supervisor/Vendors";
@@ -76,119 +77,124 @@ import { InstallPrompt } from "./components/common/InstallPrompt";
 const queryClient = new QueryClient();
 
 const AppRoutes = () => {
-  const { user } = useAuth();
+    const { user } = useAuth();
 
-  return (
-    <Routes>
-      {/* Public Routes */}
-      <Route path="/" element={<Landing />} />
-      <Route path="/login" element={<Login />} />
-      <Route path="/documentation" element={<Documentation />} />
+    return (
+        <Routes>
+            {/* Public Routes */}
+            <Route path="/" element={<Landing />} />
+            <Route path="/login" element={<Login />} />
+            <Route path="/documentation" element={<Documentation />} />
 
-      {/* Protected Routes */}
-      <Route element={<DashboardLayout />}>
-        <Route path="/dashboard" element={<Dashboard />} />
+            {/* Protected Routes */}
+            <Route element={<DashboardLayout />}>
+                <Route path="/dashboard" element={<Dashboard />} />
 
-        {/* Shared Management Routes (Conditional Based on Role) */}
-        <Route path="/projects" element={
-          user?.role === 'SuperAdmin' ? <Projects /> : <Dashboard />
-        } />
-        <Route path="/sources" element={
-          user?.role === 'SuperAdmin' ? <Sources /> : <SupervisorSources />
-        } />
-        <Route path="/locations" element={
-          user?.role === 'SuperAdmin' ? <Locations /> : <SupervisorLocations />
-        } />
-        <Route path="/record-owners" element={
-          user?.role === 'SuperAdmin' ? <RecordOwners /> : <SupervisorRecordOwners />
-        } />
-        <Route path="/record-types" element={
-          user?.role === 'SuperAdmin' ? <RecordTypes /> : <SupervisorRecordTypes />
-        } />
-        <Route path="/users" element={<Users />} />
+                {/* Shared Management Routes (Conditional Based on Role) */}
+                <Route path="/projects" element={
+                    user?.role === 'SuperAdmin' ? <Projects /> : <Dashboard />
+                } />
+                <Route path="/sources" element={
+                    user?.role === 'SuperAdmin' ? <Sources /> : <SupervisorSources />
+                } />
+                <Route path="/locations" element={
+                    user?.role === 'SuperAdmin' ? <Locations /> : <SupervisorLocations />
+                } />
+                <Route path="/record-owners" element={
+                    user?.role === 'SuperAdmin' ? <RecordOwners /> : <SupervisorRecordOwners />
+                } />
+                <Route path="/record-types" element={
+                    user?.role === 'SuperAdmin' ? <RecordTypes /> : <SupervisorRecordTypes />
+                } />
+                <Route path="/users" element={<Users />} />
 
-        {/* Supervisor Specific Routes */}
-        <Route path="/vendors" element={<Vendors />} />
-        <Route path="/vendor-allocation" element={<VendorAllocation />} />
+                {/* Supervisor Specific Routes */}
+                <Route path="/vendors" element={<Vendors />} />
+                <Route path="/vendor-allocation" element={<VendorAllocation />} />
 
-        {/* Vendor Routes */}
-        <Route path="/operators" element={<Operators />} />
-        <Route path="/operator-allocation" element={<OperatorAllocation />} />
-        <Route path="/reallocation" element={<ReworkBatches />} />
+                {/* Vendor Routes */}
+                <Route path="/operators" element={<Operators />} />
+                <Route path="/operator-allocation" element={<OperatorAllocation />} />
+                <Route path="/reallocation" element={<ReworkBatches />} />
 
-        {/* Operator Routes */}
-        <Route path="/create-batch" element={<CreateBatch />} />
-        <Route path="/upload" element={<Upload />} />
-        <Route path="/re-upload" element={<ReuploadBatches />} />
+                {/* Operator Routes */}
+                <Route path="/create-batch" element={<CreateBatch />} />
+                <Route path="/upload" element={<Upload />} />
+                <Route path="/re-upload" element={<ReuploadBatches />} />
 
-        {/* QC Routes */}
-        <Route path="/tasks" element={<QCTasks />} />
-        <Route path="/qc/:batchId" element={<QCPanel />} />
-        <Route path="/qc-users" element={<QCUsers />} />
-        <Route path="/batch-allocation" element={<BatchAllocation />} />
-        <Route path="/allocation-history" element={<AllocationHistory />} />
-        <Route path="/qc-review/:batchId" element={<QCReview />} />
-        <Route path="/qc-review-queue" element={<QCReviewQueue />} />
-        <Route path="/second-level-qc" element={<QCUserHistory />} />
+                {/* QC Routes */}
+                <Route path="/tasks" element={<QCTasks />} />
+                <Route path="/qc/:batchId" element={<QCPanel />} />
+                <Route path="/qc-users" element={<QCUsers />} />
+                <Route path="/batch-allocation" element={<BatchAllocation />} />
+                <Route path="/allocation-history" element={<AllocationHistory />} />
+                <Route path="/qc-review/:batchId" element={<QCReview />} />
+                <Route path="/qc-review-queue" element={<QCReviewQueue />} />
+                <Route path="/second-level-qc" element={<QCUserHistory />} />
 
-        {/* Dedicated Role-based Routes */}
-        <Route path="/upload-history" element={
-          user?.role === 'SuperAdmin' ? <AdminUploadHistory /> :
-            user?.role === 'Upload_Supervisor' ? <SupervisorUploadHistory /> :
-              user?.role === 'Vendor' ? <VendorUploadHistory /> :
-                <OperatorUploadHistory />
-        } />
+                {/* Dedicated Role-based Routes */}
+                <Route path="/upload-history" element={
+                    user?.role === 'SuperAdmin' ? <AdminUploadHistory /> :
+                        user?.role === 'Upload_Supervisor' ? <SupervisorUploadHistory /> :
+                            user?.role === 'Vendor' ? <VendorUploadHistory /> :
+                                <OperatorUploadHistory />
+                } />
 
-        <Route path="/qc-history" element={
-          (user?.role === 'SuperAdmin' || user?.role === 'Upload_Supervisor') ? <AdminQCHistory /> :
-            user?.role === 'QC_Supervisor' ? <QCSupervisorHistory /> :
-              user?.role === 'Vendor' ? <VendorQCHistory /> :
-                user?.role === 'Scanning_Operator' ? <OperatorQCHistory /> : <QCUserHistory />
-        } />
+                <Route path="/qc-history" element={
+                    (user?.role === 'SuperAdmin' || user?.role === 'Upload_Supervisor') ? <AdminQCHistory /> :
+                        user?.role === 'QC_Supervisor' ? <QCSupervisorHistory /> :
+                            user?.role === 'Vendor' ? <VendorQCHistory /> :
+                                user?.role === 'Scanning_Operator' ? <OperatorQCHistory /> : <QCUserHistory />
+                } />
 
-        <Route path="/accepted-batches" element={
-          (user?.role === 'SuperAdmin' || user?.role === 'Upload_Supervisor' || user?.role === 'QC_Supervisor') ? <AcceptedBatches /> : <Dashboard />
-        } />
+                <Route path="/accepted-batches" element={
+                    (user?.role === 'SuperAdmin' || user?.role === 'Upload_Supervisor' || user?.role === 'QC_Supervisor') ? <AcceptedBatches /> : <Dashboard />
+                } />
 
-        <Route path="/vendor/image-preview/:batchUid?" element={<VendorImagePreview />} />
+                <Route path="/vendor/image-preview/:batchUid?" element={<VendorImagePreview />} />
 
-        <Route path="/supervisor/image-preview/:batchUid?" element={<SupervisorImagePreview />} />
+                <Route path="/supervisor/image-preview/:batchUid?" element={<SupervisorImagePreview />} />
 
-        <Route path="/image-preview/:batchUid?" element={
-          user?.role === 'Scanning_Operator' ? <OperatorImagePreview /> : <VendorImagePreview />
-        } />
+                <Route path="/image-preview/:batchUid?" element={
+                    user?.role === 'Scanning_Operator' ? <OperatorImagePreview /> : <VendorImagePreview />
+                } />
 
-        <Route path="/settings" element={<Settings />} />
-        <Route path="/profile" element={<Profile />} />
-        <Route path="/notifications" element={<Notifications />} />
-      </Route>
+                <Route path="/settings" element={<Settings />} />
+                <Route path="/profile" element={<Profile />} />
+                <Route path="/notifications" element={<Notifications />} />
 
-      {/* 404 */}
-      <Route path="/offline" element={<Offline />} />
-      <Route path="*" element={<NotFound />} />
-    </Routes>
-  );
+                {/* Audit Logs - SuperAdmin Only */}
+                <Route path="/audit-logs" element={
+                    user?.role === 'SuperAdmin' ? <AuditLogs /> : <Dashboard />
+                } />
+            </Route>
+
+            {/* 404 */}
+            <Route path="/offline" element={<Offline />} />
+            <Route path="*" element={<NotFound />} />
+        </Routes>
+    );
 };
 
 const App = () => (
-  <QueryClientProvider client={queryClient}>
-    <ThemeProvider>
-      <AuthProvider>
-        <TooltipProvider>
-          <Toaster />
-          <Sonner />
-          <BrowserRouter>
-            {/* PWA Components */}
-            <NetworkStatus />
-            <PWAUpdatePrompt />
-            <InstallPrompt />
+    <QueryClientProvider client={queryClient}>
+        <ThemeProvider>
+            <AuthProvider>
+                <TooltipProvider>
+                    <Toaster />
+                    <Sonner />
+                    <BrowserRouter>
+                        {/* PWA Components */}
+                        <NetworkStatus />
+                        <PWAUpdatePrompt />
+                        <InstallPrompt />
 
-            <AppRoutes />
-          </BrowserRouter>
-        </TooltipProvider>
-      </AuthProvider>
-    </ThemeProvider>
-  </QueryClientProvider>
+                        <AppRoutes />
+                    </BrowserRouter>
+                </TooltipProvider>
+            </AuthProvider>
+        </ThemeProvider>
+    </QueryClientProvider>
 );
 
 export default App;

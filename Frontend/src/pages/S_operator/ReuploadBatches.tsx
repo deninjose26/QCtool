@@ -33,6 +33,7 @@ import { API_BASE_URL } from '@/config';
 import { storeFilesInQueue, getPendingFiles, clearBatch } from '@/utils/uploadDB';
 import { UploadManager, syncWithServer } from '@/utils/uploadManager';
 import { useNetworkStatus } from '@/hooks/useNetworkStatus';
+import { useAuth } from '@/contexts/AuthContext';
 import {
     Dialog,
     DialogContent,
@@ -93,13 +94,14 @@ const ReuploadBatches: React.FC = () => {
     const [filesCompleted, setFilesCompleted] = useState(0);
 
     const { toast } = useToast();
+    const { user } = useAuth();
     const navigate = useNavigate();
     const fileInputRef = useRef<HTMLInputElement>(null);
     const uploadManagerRef = useRef<UploadManager | null>(null);
 
     const token = localStorage.getItem('qc_token');
     const headers = { 'Authorization': `Bearer ${token}` };
-    const { isOnline } = useNetworkStatus();
+    const { isOnline, wasOffline, reportNetworkFailure } = useNetworkStatus();
 
     const fetchBatches = async () => {
         try {
@@ -126,7 +128,19 @@ const ReuploadBatches: React.FC = () => {
     };
 
     useEffect(() => {
+        // Reset global stop flag when component mounts
+        import('@/utils/uploadManager').then(m => m.UploadManager.resetGlobalStop());
         fetchBatches();
+
+        // Cleanup on unmount
+        return () => {
+            console.log('ReuploadBatches: Component unmounting - stopping uploads');
+            import('@/utils/uploadManager').then(m => m.UploadManager.stopAllInstances());
+            if (uploadManagerRef.current) {
+                uploadManagerRef.current.destroy();
+                uploadManagerRef.current = null;
+            }
+        };
     }, []);
 
     // Derived Filter Options
@@ -161,10 +175,10 @@ const ReuploadBatches: React.FC = () => {
     // Check for pending uploads on page load and auto-resume
     const checkAndResumePendingUploads = async () => {
         try {
-            if (!token) return;
+            if (!token || !user?.id) return;
 
             const { getBatchesWithPendingUploads } = await import('@/utils/uploadDB');
-            const pendingBatchUids = await getBatchesWithPendingUploads();
+            const pendingBatchUids = await getBatchesWithPendingUploads(user.id);
 
             if (pendingBatchUids.length === 0) return;
 
@@ -205,12 +219,26 @@ const ReuploadBatches: React.FC = () => {
                 description: `Continuing re-upload of ${filesToUpload.length} remaining images for batch ${batch.batch_id}`,
             });
 
-            const uploadManager = new UploadManager(token);
+            // Reset global stop flag to ensure upload can proceed
+            const { UploadManager: UploadManagerClass } = await import('@/utils/uploadManager');
+            UploadManagerClass.resetGlobalStop();
+
+            const uploadManager = new UploadManagerClass(token, () => {
+                if (isUploading) {
+                    console.warn('⚡ [FAST-OFFLINE] Rework resume detected network failure');
+                    reportNetworkFailure();
+                }
+            });
             uploadManagerRef.current = uploadManager;
 
+            // Extract file IDs from QueuedFile objects
+            const fileIds = filesToUpload.map(f => f.id).filter((id): id is number => id !== undefined);
+
+            // Note: Resume won't work after page refresh for reuploads because we don't have
+            // the actual File objects anymore. User will need to re-select the folder.
             uploadManager.processUploadQueue(
                 batchUid,
-                filesToUpload,
+                fileIds,
                 (fileProgress) => {
                     setCurrentFileName(fileProgress.fileName);
                     setUploadProgress(fileProgress.progress);
@@ -238,7 +266,9 @@ const ReuploadBatches: React.FC = () => {
                 (error) => {
                     console.error('Resume rework error:', error);
                     toast({ title: 'Upload Error', description: error.message, variant: 'destructive' });
-                }
+                },
+                10 // concurrency
+                // filesArray is undefined here - resume won't work after page refresh
             );
 
         } catch (error) {
@@ -295,32 +325,60 @@ const ReuploadBatches: React.FC = () => {
     };
 
     const handleUploadClick = async (batch: OperatorBatch) => {
-        // If there's an active upload pending in IndexDB for this batch, resume it directly
-        const { getBatchesWithPendingUploads } = await import('@/utils/uploadDB');
-        const pendingBatchUids = await getBatchesWithPendingUploads();
+        console.log("🔵 handleUploadClick called for batch:", batch.batch_id);
 
-        if (pendingBatchUids.includes(batch.batch_uid)) {
-            checkAndResumePendingUploads();
+        if (!user?.id) {
+            toast({
+                title: 'Error',
+                description: 'User not authenticated',
+                variant: 'destructive'
+            });
             return;
         }
 
-        setSelectedBatch(batch);
-        setSelectedFiles([]);
-        setRejectedFilenames([]);
-        setInvalidFileNames([]);
-        setIsDialogOpen(true);
-
-        // Fetch rejected filenames for validation
         try {
-            const res = await fetch(`${API_BASE_URL}/operator/batches/${batch.batch_uid}/rejected-filenames`, { headers });
-            if (res.ok) {
-                const data = await res.json();
-                setRejectedFilenames(data);
+            // If there's an active upload pending in IndexDB for this batch, resume it directly
+            const { getBatchesWithPendingUploads } = await import('@/utils/uploadDB');
+            const pendingBatchUids = await getBatchesWithPendingUploads(user.id);
+            console.log("🔵 Pending batch UIDs:", pendingBatchUids);
+
+            if (pendingBatchUids.includes(batch.batch_uid)) {
+                console.log("🔵 Resuming pending uploads");
+                checkAndResumePendingUploads();
+                return;
+            }
+
+            console.log("🔵 Setting dialog state to open");
+            setSelectedBatch(batch);
+            setSelectedFiles([]);
+            setRejectedFilenames([]);
+            setInvalidFileNames([]);
+            setIsDialogOpen(true);
+
+            // Fetch rejected filenames for validation
+            try {
+                const res = await fetch(`${API_BASE_URL}/operator/batches/${batch.batch_uid}/rejected-filenames`, { headers });
+                if (res.ok) {
+                    const data = await res.json();
+                    console.log("🔵 Rejected filenames:", data);
+                    setRejectedFilenames(data);
+                } else {
+                    console.error("Failed to fetch rejected filenames:", res.status, res.statusText);
+                }
+            } catch (error) {
+                console.error("Error fetching rejected filenames:", error);
             }
         } catch (error) {
-            console.error("Error fetching rejected filenames:", error);
+            console.error("Error in handleUploadClick:", error);
+            toast({
+                title: 'Error',
+                description: `Failed to open upload dialog: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                variant: 'destructive'
+            });
         }
     };
+
+
 
     const handleBrowseClick = () => {
         if (fileInputRef.current) {
@@ -375,15 +433,21 @@ const ReuploadBatches: React.FC = () => {
         if (!selectedBatch || selectedFiles.length === 0 || !token) return;
 
         try {
+            if (!user?.id) {
+                toast({ title: 'Error', description: 'User not authenticated', variant: 'destructive' });
+                return;
+            }
+
             setIsSubmitting(true);
             setPreparationProgress(0);
-            await storeFilesInQueue(selectedBatch.batch_uid, selectedFiles, (progress) => {
+            await storeFilesInQueue(user.id, selectedBatch.batch_uid, selectedFiles, (progress) => {
                 setPreparationProgress(progress);
             });
             const uploadedFiles = await syncWithServer(selectedBatch.batch_uid, token);
+            const uploadedSet = new Set(uploadedFiles.map(f => f.toLowerCase()));
 
             let pendingFiles = await getPendingFiles(selectedBatch.batch_uid);
-            pendingFiles = pendingFiles.filter(f => !uploadedFiles.includes(f.file_name));
+            pendingFiles = pendingFiles.filter(f => !uploadedSet.has(f.file_name.toLowerCase()));
 
             if (pendingFiles.length === 0) {
                 toast({ title: 'Already Complete', description: 'All files have already been uploaded.' });
@@ -397,13 +461,26 @@ const ReuploadBatches: React.FC = () => {
             setIsUploading(true);
             setUploadProgress(0);
             setFilesCompleted(0);
+            setIsSubmitting(false);
 
-            const uploadManager = new UploadManager(token);
+            // Reset global stop flag to ensure upload can proceed
+            const { UploadManager: UploadManagerClass } = await import('@/utils/uploadManager');
+            UploadManagerClass.resetGlobalStop();
+
+            const uploadManager = new UploadManagerClass(token, () => {
+                if (isUploading) {
+                    console.warn('⚡ [FAST-OFFLINE] Rework upload detected network failure');
+                    reportNetworkFailure();
+                }
+            });
             uploadManagerRef.current = uploadManager;
+
+            // Extract file IDs from QueuedFile objects
+            const fileIds = pendingFiles.map(f => f.id).filter((id): id is number => id !== undefined);
 
             uploadManager.processUploadQueue(
                 selectedBatch.batch_uid,
-                pendingFiles,
+                fileIds,
                 (fileProgress) => {
                     setCurrentFileName(fileProgress.fileName);
                     setUploadProgress(fileProgress.progress);
@@ -429,7 +506,9 @@ const ReuploadBatches: React.FC = () => {
                 (error) => {
                     console.error('Upload error:', error);
                     toast({ title: 'Upload Error', description: error.message, variant: 'destructive' });
-                }
+                },
+                10, // concurrency
+                selectedFiles // Pass the actual File objects so upload manager can access them
             );
 
         } catch (err) {

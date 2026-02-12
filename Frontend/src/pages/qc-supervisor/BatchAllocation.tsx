@@ -91,6 +91,7 @@ const BatchAllocation = () => {
     const [isDialogOpen, setIsDialogOpen] = useState(false);
     const [selectedBatch, setSelectedBatch] = useState<QCBatch | null>(null);
     const [selectedUserId, setSelectedUserId] = useState<string>("");
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
     // Filter States
     const [searchTerm, setSearchTerm] = useState('');
@@ -226,6 +227,7 @@ const BatchAllocation = () => {
         if (!selectedBatch || !selectedUserId) return;
 
         try {
+            setIsSubmitting(true);
             const res = await apiFetch(`${API_BASE_URL}/qc-sup/allocate`, {
                 method: 'POST',
                 headers: {
@@ -238,14 +240,17 @@ const BatchAllocation = () => {
             });
 
             if (!res.ok) {
-                throw new Error('Allocation failed');
+                const error = await res.json().catch(() => ({}));
+                throw new Error(error.detail || 'Allocation failed');
             }
 
             toast({ title: 'Success', description: 'Batch allocated successfully' });
             setIsDialogOpen(false);
             fetchData();
-        } catch (error) {
-            toast({ title: 'Error', description: 'Failed to allocate batch', variant: 'destructive' });
+        } catch (error: any) {
+            toast({ title: 'Error', description: error.message || 'Failed to allocate batch', variant: 'destructive' });
+        } finally {
+            setIsSubmitting(false);
         }
     };
 
@@ -614,13 +619,20 @@ const BatchAllocation = () => {
                         )}
                     </div>
                     <DialogFooter>
-                        <Button variant="outline" onClick={() => setIsDialogOpen(false)} className="h-10">Cancel</Button>
+                        <Button variant="outline" onClick={() => setIsDialogOpen(false)} className="h-10" disabled={isSubmitting}>Cancel</Button>
                         <Button
                             onClick={handleConfirmAllocate}
-                            disabled={!selectedUserId}
-                            className="h-10 bg-indigo-600 hover:bg-indigo-700 gap-2"
+                            disabled={!selectedUserId || isSubmitting}
+                            className="h-10 bg-indigo-600 hover:bg-indigo-700 gap-2 min-w-[150px]"
                         >
-                            Confirm Allocation
+                            {isSubmitting ? (
+                                <>
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    <span>Allocating...</span>
+                                </>
+                            ) : (
+                                "Confirm Allocation"
+                            )}
                         </Button>
                     </DialogFooter>
                 </DialogContent>

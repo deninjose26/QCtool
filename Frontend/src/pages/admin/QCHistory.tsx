@@ -256,31 +256,6 @@ const AdminQCHistory: React.FC = () => {
             render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
         },
         {
-            key: 'upload_type',
-            header: 'Type',
-            render: (val: string, item: AdminQCHistoryTask) => (
-                <div className="flex flex-col gap-1">
-                    <Badge className={cn(
-                        "text-[10px] font-bold uppercase w-fit",
-                        val === 'Complete' ? "bg-emerald-100 text-emerald-700 border-emerald-200" :
-                            val === 'Partial' ? "bg-blue-100 text-blue-700 border-blue-200" :
-                                "bg-amber-100 text-amber-700 border-amber-200"
-                    )}>
-                        {val}
-                    </Badge>
-                    {item.status_detail && (
-                        <span className={cn(
-                            "text-[9px] font-black uppercase px-1 py-0.5 rounded",
-                            item.status_detail === 'Replaced by Rework' ? "text-slate-400 bg-slate-100 line-through decoration-slate-400" :
-                                "text-indigo-600 bg-indigo-50"
-                        )}>
-                            {item.status_detail}
-                        </span>
-                    )}
-                </div>
-            )
-        },
-        {
             key: 'vendor_name',
             header: 'Vendor',
             render: (val: string) => <span className="text-[10px] font-medium text-slate-600">{val}</span>
@@ -307,13 +282,37 @@ const AdminQCHistory: React.FC = () => {
         },
         {
             key: 'record_type_name',
-            header: 'Type',
+            header: 'Record Type',
             render: (val: string) => <span className="text-[10px] text-slate-500 max-w-[100px] truncate block" title={val}>{val}</span>
         },
         {
             key: 'record_name',
             header: 'Book Name',
             render: (val: string) => <span className="text-[10px] font-black text-slate-700 max-w-[150px] truncate block" title={val}>{val}</span>
+        },
+        {
+            key: 'upload_type',
+            header: 'Upload Type',
+            render: (val: string, item: AdminQCHistoryTask) => (
+                <div className="flex flex-col gap-1">
+                    <Badge className={cn(
+                        "text-[10px] font-bold uppercase w-fit",
+                        val === 'Complete' ? "bg-emerald-100 text-emerald-700 border-emerald-200" :
+                            val === 'Partial' ? "bg-blue-100 text-blue-700 border-blue-200" :
+                                "bg-amber-100 text-amber-700 border-amber-200"
+                    )}>
+                        {val}
+                    </Badge>
+                    {item.status_detail && item.status_detail !== 'Replaced by Rework' && (
+                        <span className={cn(
+                            "text-[9px] font-black uppercase px-1 py-0.5 rounded",
+                            "text-indigo-600 bg-indigo-50"
+                        )}>
+                            {item.status_detail}
+                        </span>
+                    )}
+                </div>
+            )
         },
         { key: 'total_count', header: 'Images', sortable: true },
         {

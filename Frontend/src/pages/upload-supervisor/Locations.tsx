@@ -165,6 +165,15 @@ const Locations: React.FC = () => {
     };
 
     const handleDelete = async (id: string) => {
+        if (user?.role !== 'SuperAdmin') {
+            toast({
+                title: 'Permission Denied',
+                description: 'Only Admins are permitted to delete records. Please contact Administrator.',
+                variant: 'destructive'
+            });
+            return;
+        }
+
         if (!confirm('Are you sure you want to delete this location?')) return;
         try {
             const response = await fetch(`${API_BASE_URL}/admin/locations/${id}`, {
@@ -174,8 +183,14 @@ const Locations: React.FC = () => {
             if (response.ok) {
                 toast({ title: 'Location deleted successfully' });
                 fetchData();
+            } else {
+                const error = await response.json();
+                toast({ title: 'Error', description: error.detail || 'Failed to delete location', variant: 'destructive' });
             }
-        } catch (error) { console.error('Delete error:', error); }
+        } catch (error) {
+            console.error('Delete error:', error);
+            toast({ title: 'Error', description: 'An unexpected error occurred', variant: 'destructive' });
+        }
     };
 
     const columns = [
@@ -211,7 +226,7 @@ const Locations: React.FC = () => {
 
     return (
         <div className="space-y-6 animate-fade-in">
-            <PageHeader title="Locations (Upload Sup)" description="Manage scan locations" action={{ label: 'Add Location', onClick: handleCreate }} />
+            <PageHeader title="Locations" description="Manage scan locations" action={{ label: 'Add Location', onClick: handleCreate }} />
             {isLoading ? (
                 <div className="flex flex-col items-center justify-center h-64 space-y-4"><Loader2 className="h-8 w-8 animate-spin text-primary" /><p className="text-muted-foreground animate-pulse">Loading locations...</p></div>
             ) : (
@@ -238,7 +253,7 @@ const Locations: React.FC = () => {
 
                         <div className="space-y-2">
                             <Label>Name</Label>
-                            <Input value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="e.g., Room 101" />
+                            <Input value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="e.g., NEW DELHI" />
                         </div>
                     </div>
                     <DialogFooter>

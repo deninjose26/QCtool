@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
@@ -6,7 +6,7 @@ import { getNavItems, roleLabels } from '@/lib/role-config';
 import {
   Shield, Circle, LayoutDashboard, FolderKanban, Database, MapPin,
   Building2, FileText, Users, Upload, CheckCircle, Briefcase, GitBranch,
-  UserCog, History, Image, RefreshCw, PlusCircle, ClipboardList, ShieldCheck
+  UserCog, History, Image, RefreshCw, PlusCircle, ClipboardList, ShieldCheck, FileStack
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -17,6 +17,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import logo from '@/assets/logo.png';
+import { API_BASE_URL } from '@/config';
 
 interface SidebarProps {
   open: boolean;
@@ -44,12 +45,47 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   Shield,
   ShieldCheck,
   Circle,
+  FileStack,
 };
 
 const Sidebar: React.FC<SidebarProps> = ({ open, onClose }) => {
-  const { user } = useAuth();
+  const { user, apiFetch } = useAuth();
   const location = useLocation();
-  const navItems = user ? getNavItems(user.role) : [];
+  const [auditLogsEnabled, setAuditLogsEnabled] = useState(false);
+
+  // Fetch audit logs setting for SuperAdmin
+  useEffect(() => {
+    const fetchAuditLogsSetting = async () => {
+      if (user?.role === 'SuperAdmin') {
+        try {
+          const res = await apiFetch(`${API_BASE_URL}/admin/settings/enable_audit_logs`);
+          if (res.ok) {
+            const data = await res.json();
+            setAuditLogsEnabled(data.setting_value === 'true');
+          }
+        } catch (error) {
+          console.error('Failed to fetch audit logs setting:', error);
+        }
+      }
+    };
+
+    fetchAuditLogsSetting();
+
+    // Listen for setting changes from other components
+    window.addEventListener('settings-updated', fetchAuditLogsSetting);
+    return () => window.removeEventListener('settings-updated', fetchAuditLogsSetting);
+  }, [user?.role, apiFetch]);
+
+  // Get base nav items and conditionally add Audit Logs
+  let navItems = user ? getNavItems(user.role) : [];
+
+  // Add Audit Logs to SuperAdmin menu if enabled
+  if (user?.role === 'SuperAdmin' && auditLogsEnabled) {
+    navItems = [
+      ...navItems,
+      { title: 'Audit Logs', href: '/audit-logs', icon: 'FileStack' }
+    ];
+  }
 
   return (
     <>

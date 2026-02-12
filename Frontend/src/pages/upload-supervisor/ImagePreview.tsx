@@ -14,7 +14,16 @@ import {
     LayoutGrid,
     Search,
     Loader2,
-    Book
+    Book,
+    Filter,
+    Briefcase,
+    Building2,
+    MapPin,
+    Database,
+    ShieldCheck,
+    Layers,
+    X,
+    Upload
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { API_BASE_URL } from '@/config';
@@ -26,6 +35,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
 
 interface SupervisorBatch {
     batch_uid: string;
@@ -191,12 +201,26 @@ const SupervisorImagePreview: React.FC = () => {
     // Security & Anti-Screenshot logic
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
+            // Security bypasses
             if (e.key === 'PrintScreen') {
                 e.preventDefault();
                 toast({ title: 'Security Alert', description: 'Screenshots are disabled for security reasons.', variant: 'destructive' });
             }
             if ((e.ctrlKey && e.shiftKey && e.key === 'I') || e.key === 'F12') {
                 e.preventDefault();
+            }
+
+            // Navigation shortcuts (only if not typing in an input)
+            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+            if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+                e.preventDefault();
+                setCurrentIndex(i => Math.max(0, i - 1));
+                setRotation(0);
+            } else if (e.key === 'ArrowRight' || e.key === 'PageDown') {
+                e.preventDefault();
+                setCurrentIndex(i => Math.min(images.length - 1, i + 1));
+                setRotation(0);
             }
         };
 
@@ -221,7 +245,18 @@ const SupervisorImagePreview: React.FC = () => {
             window.removeEventListener('mouseenter', handleFocusGained);
             document.removeEventListener('visibilitychange', handleVisibilityChange);
         };
-    }, [toast]);
+    }, [toast, images.length]);
+
+    const resetFilters = () => {
+        setProjectFilter('all');
+        setSourceFilter('all');
+        setLocationFilter('all');
+        setOwnerFilter('all');
+        setTypeFilter('all');
+        setUploadTypeFilter('all');
+        setBookFilter('all');
+        setSearchQuery('');
+    };
 
     // Pagination
     const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
@@ -255,92 +290,137 @@ const SupervisorImagePreview: React.FC = () => {
                 </div>
 
                 <div className="space-y-2">
-                    {/* First Row: Project, Source, Location, Owner */}
-                    <div className="grid grid-cols-4 gap-2 bg-muted/40 p-2 rounded-xl border">
-                        <Select value={projectFilter} onValueChange={(v) => {
-                            setProjectFilter(v); setSourceFilter('all'); setLocationFilter('all'); setOwnerFilter('all'); setTypeFilter('all'); setUploadTypeFilter('all'); setBookFilter('all');
-                        }}>
-                            <SelectTrigger className="h-8 text-[10px] bg-background border-none shadow-sm"><SelectValue placeholder="Project" /></SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all">Project</SelectItem>
-                                {projects.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
-                            </SelectContent>
-                        </Select>
+                    <div className="p-4 bg-background border rounded-xl shadow-sm space-y-4">
+                        {/* Unified Search & Reset Row */}
+                        <div className="flex flex-wrap items-end gap-3 pb-2 border-b">
+                            <div className="space-y-1.5 flex-[2] min-w-[300px]">
+                                <label className="text-xs font-bold text-muted-foreground uppercase flex items-center gap-1.5 px-0.5">
+                                    <Search className="h-3 w-3" /> Search Image
+                                </label>
+                                <div className="relative">
+                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                    <Input
+                                        placeholder="Search image name within selected batch..."
+                                        value={searchQuery}
+                                        onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
+                                        className="pl-9 bg-muted/30 border-none h-10 shadow-inner text-xs"
+                                        disabled={bookFilter === 'all'}
+                                    />
+                                </div>
+                            </div>
 
-                        <Select value={sourceFilter} onValueChange={(v) => {
-                            setSourceFilter(v); setLocationFilter('all'); setOwnerFilter('all'); setTypeFilter('all'); setUploadTypeFilter('all'); setBookFilter('all');
-                        }} disabled={projectFilter === 'all'}>
-                            <SelectTrigger className="h-8 text-[10px] bg-background border-none shadow-sm"><SelectValue placeholder="Source" /></SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all">Source</SelectItem>
-                                {sources.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                            </SelectContent>
-                        </Select>
+                            {(projectFilter !== 'all' || sourceFilter !== 'all' || locationFilter !== 'all' || ownerFilter !== 'all' || typeFilter !== 'all' || uploadTypeFilter !== 'all' || bookFilter !== 'all' || searchQuery !== '') && (
+                                <Button variant="ghost" onClick={resetFilters} className="h-10 text-muted-foreground flex gap-2 hover:bg-red-50 hover:text-red-500 font-bold text-xs uppercase">
+                                    <X className="h-4 w-4" /> RESET
+                                </Button>
+                            )}
+                        </div>
 
-                        <Select value={locationFilter} onValueChange={(v) => {
-                            setLocationFilter(v); setOwnerFilter('all'); setTypeFilter('all'); setUploadTypeFilter('all'); setBookFilter('all');
-                        }} disabled={sourceFilter === 'all'}>
-                            <SelectTrigger className="h-8 text-[10px] bg-background border-none shadow-sm"><SelectValue placeholder="Location" /></SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all">Location</SelectItem>
-                                {locations.map(l => <SelectItem key={l} value={l}>{l}</SelectItem>)}
-                            </SelectContent>
-                        </Select>
+                        {/* Drill-down Selects Grid */}
+                        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+                            <div className="space-y-1.5">
+                                <label className="text-xs font-bold text-muted-foreground uppercase flex items-center gap-1.5 px-0.5"><Briefcase className="h-3 w-3" /> Project</label>
+                                <Select value={projectFilter} onValueChange={(v) => {
+                                    setProjectFilter(v); setSourceFilter('all'); setLocationFilter('all'); setOwnerFilter('all'); setTypeFilter('all'); setUploadTypeFilter('all'); setBookFilter('all');
+                                }}>
+                                    <SelectTrigger className="h-10 border-none bg-muted/50 transition-colors text-[11px]"><SelectValue placeholder="Project" /></SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All Projects</SelectItem>
+                                        {projects.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+                                    </SelectContent>
+                                </Select>
+                            </div>
 
-                        <Select value={ownerFilter} onValueChange={(v) => {
-                            setOwnerFilter(v); setTypeFilter('all'); setUploadTypeFilter('all'); setBookFilter('all');
-                        }} disabled={locationFilter === 'all'}>
-                            <SelectTrigger className="h-8 text-[10px] bg-background border-none shadow-sm"><SelectValue placeholder="Owner" /></SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all">Owner</SelectItem>
-                                {owners.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
-                            </SelectContent>
-                        </Select>
-                    </div>
+                            <div className="space-y-1.5">
+                                <label className="text-xs font-bold text-muted-foreground uppercase flex items-center gap-1.5 px-0.5"><Database className="h-3 w-3" /> Source</label>
+                                <Select value={sourceFilter} onValueChange={(v) => {
+                                    setSourceFilter(v); setLocationFilter('all'); setOwnerFilter('all'); setTypeFilter('all'); setUploadTypeFilter('all'); setBookFilter('all');
+                                }} disabled={projectFilter === 'all'}>
+                                    <SelectTrigger className="h-10 border-none bg-muted/50 transition-colors text-[11px]"><SelectValue placeholder="Source" /></SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All Sources</SelectItem>
+                                        {sources.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                                    </SelectContent>
+                                </Select>
+                            </div>
 
-                    {/* Second Row: Type, Upload Type, Book */}
-                    <div className="grid grid-cols-3 gap-2 bg-muted/40 p-2 rounded-xl border">
-                        <Select value={typeFilter} onValueChange={(v) => {
-                            setTypeFilter(v); setUploadTypeFilter('all'); setBookFilter('all');
-                        }} disabled={ownerFilter === 'all'}>
-                            <SelectTrigger className="h-8 text-[10px] bg-background border-none shadow-sm"><SelectValue placeholder="Type" /></SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all">Type</SelectItem>
-                                {types.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
-                            </SelectContent>
-                        </Select>
+                            <div className="space-y-1.5">
+                                <label className="text-xs font-bold text-muted-foreground uppercase flex items-center gap-1.5 px-0.5"><MapPin className="h-3 w-3" /> Location</label>
+                                <Select value={locationFilter} onValueChange={(v) => {
+                                    setLocationFilter(v); setOwnerFilter('all'); setTypeFilter('all'); setUploadTypeFilter('all'); setBookFilter('all');
+                                }} disabled={sourceFilter === 'all'}>
+                                    <SelectTrigger className="h-10 border-none bg-muted/50 transition-colors text-[11px]"><SelectValue placeholder="Location" /></SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All Locations</SelectItem>
+                                        {locations.map(l => <SelectItem key={l} value={l}>{l}</SelectItem>)}
+                                    </SelectContent>
+                                </Select>
+                            </div>
 
-                        <Select value={uploadTypeFilter} onValueChange={(v) => {
-                            setUploadTypeFilter(v); setBookFilter('all');
-                        }} disabled={typeFilter === 'all'}>
-                            <SelectTrigger className="h-8 text-[10px] bg-background border-none shadow-sm"><SelectValue placeholder="Upload" /></SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="all">Upload</SelectItem>
-                                {uploadTypes.map(ut => <SelectItem key={ut} value={ut}>{ut}</SelectItem>)}
-                            </SelectContent>
-                        </Select>
+                            <div className="space-y-1.5">
+                                <label className="text-xs font-bold text-muted-foreground uppercase flex items-center gap-1.5 px-0.5"><ShieldCheck className="h-3 w-3" /> Owner</label>
+                                <Select value={ownerFilter} onValueChange={(v) => {
+                                    setOwnerFilter(v); setTypeFilter('all'); setUploadTypeFilter('all'); setBookFilter('all');
+                                }} disabled={locationFilter === 'all'}>
+                                    <SelectTrigger className="h-10 border-none bg-muted/50 transition-colors text-[11px]"><SelectValue placeholder="Owner" /></SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All Owners</SelectItem>
+                                        {owners.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                                    </SelectContent>
+                                </Select>
+                            </div>
 
-                        <Select value={bookFilter} onValueChange={setBookFilter} disabled={uploadTypeFilter === 'all' && availableBooks.length === 0}>
-                            <SelectTrigger className="h-8 text-[10px] border-primary/30 bg-primary/5 font-bold shadow-sm">
-                                <SelectValue placeholder="Select Book" />
-                            </SelectTrigger>
-                            <SelectContent className="max-h-[300px] p-1.5 rounded-2xl border-slate-200/60 shadow-2xl">
-                                <SelectItem value="all" className="p-2.5 mb-1 last:mb-0 rounded-xl transition-all focus:bg-slate-50 border border-transparent focus:border-slate-100 font-bold text-xs uppercase text-slate-400 italic">Select Batch...</SelectItem>
-                                {availableBooks.map(b => (
-                                    <SelectItem key={b.batch_uid} value={b.batch_uid} className="p-2.5 mb-1 last:mb-0 rounded-xl transition-all focus:bg-indigo-50 group border border-transparent focus:border-indigo-100">
-                                        <div className="flex items-center gap-3">
-                                            <div className="h-9 w-9 rounded-lg bg-gradient-to-br from-indigo-500/10 to-indigo-500/5 flex items-center justify-center text-indigo-600 group-focus:scale-110 transition-transform">
-                                                <Book className="h-4 w-4" />
-                                            </div>
-                                            <div className="flex flex-col">
-                                                <span className="text-[11px] font-black uppercase tracking-tight text-slate-700 group-focus:text-indigo-700">{b.book_name}</span>
-                                                <span className="text-[9px] font-bold font-mono text-slate-400 uppercase tracking-tighter group-focus:text-indigo-400/80">ID: {b.batch_id.slice(-12)}</span>
-                                            </div>
-                                        </div>
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
+                            <div className="space-y-1.5">
+                                <label className="text-xs font-bold text-muted-foreground uppercase flex items-center gap-1.5 px-0.5"><Layers className="h-3 w-3" /> Type</label>
+                                <Select value={typeFilter} onValueChange={(v) => {
+                                    setTypeFilter(v); setUploadTypeFilter('all'); setBookFilter('all');
+                                }} disabled={ownerFilter === 'all'}>
+                                    <SelectTrigger className="h-10 border-none bg-muted/50 transition-colors text-[11px]"><SelectValue placeholder="Type" /></SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All Types</SelectItem>
+                                        {types.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+
+                            <div className="space-y-1.5">
+                                <label className="text-xs font-bold text-muted-foreground uppercase flex items-center gap-1.5 px-0.5"><Upload className="h-3 w-3" /> Upload</label>
+                                <Select value={uploadTypeFilter} onValueChange={(v) => {
+                                    setUploadTypeFilter(v); setBookFilter('all');
+                                }} disabled={typeFilter === 'all'}>
+                                    <SelectTrigger className="h-10 border-none bg-muted/50 transition-colors text-[11px]"><SelectValue placeholder="Upload" /></SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All Uploads</SelectItem>
+                                        {uploadTypes.map(ut => <SelectItem key={ut} value={ut}>{ut}</SelectItem>)}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+
+                            <div className="space-y-1.5">
+                                <label className="text-xs font-bold text-muted-foreground uppercase flex items-center gap-1.5 px-0.5"><Book className="h-3 w-3" /> Batch</label>
+                                <Select value={bookFilter} onValueChange={setBookFilter} disabled={uploadTypeFilter === 'all' && availableBooks.length === 0}>
+                                    <SelectTrigger className="h-10 border-none bg-primary/10 transition-colors text-[11px] font-bold ring-offset-background focus:ring-2 focus:ring-primary/20">
+                                        <SelectValue placeholder="Batch" />
+                                    </SelectTrigger>
+                                    <SelectContent className="max-h-[300px] p-2 rounded-xl border shadow-2xl">
+                                        <SelectItem value="all" className="p-2 mb-1 rounded-lg text-xs font-bold text-muted-foreground italic">Select Batch...</SelectItem>
+                                        {availableBooks.map(b => (
+                                            <SelectItem key={b.batch_uid} value={b.batch_uid} className="p-2 mb-1 rounded-lg transition-all focus:bg-primary/5 group">
+                                                <div className="flex items-center gap-3">
+                                                    <div className="h-8 w-8 rounded bg-primary/10 flex items-center justify-center text-primary group-focus:scale-110 transition-transform">
+                                                        <Book className="h-3.5 w-3.5" />
+                                                    </div>
+                                                    <div className="flex flex-col">
+                                                        <span className="text-[11px] font-black uppercase text-slate-700">{b.book_name}</span>
+                                                        <span className="text-[9px] font-mono text-slate-400">ID: {b.batch_id.slice(-8)}</span>
+                                                    </div>
+                                                </div>
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -380,12 +460,12 @@ const SupervisorImagePreview: React.FC = () => {
                                 <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 animate-pulse">Scanning...</p>
                             </div>
                         ) : currentImage?.url && !imageLoadError ? (
-                            <div className="min-w-full min-h-full flex items-center justify-center p-6">
+                            <div className="w-full h-full flex items-center justify-center p-2">
                                 <img
                                     src={currentImage.url}
                                     alt={currentImage.image_name}
                                     onContextMenu={(e) => e.preventDefault()}
-                                    className="max-w-full max-h-full object-contain transition-transform duration-300 shadow-sm"
+                                    className="w-full h-full object-contain transition-transform duration-300 shadow-sm"
                                     style={{
                                         transform: `scale(${zoom}) rotate(${rotation}deg)`,
                                         transformOrigin: 'center center'
@@ -428,16 +508,6 @@ const SupervisorImagePreview: React.FC = () => {
                                 <Badge variant="secondary" className="text-[10px] font-mono font-bold bg-primary/10 text-primary border-none">
                                     {filteredImages.length} FOUND
                                 </Badge>
-                            </div>
-                            <div className="relative">
-                                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-                                <input
-                                    type="text"
-                                    placeholder="Search image name..."
-                                    value={searchQuery}
-                                    onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
-                                    className="w-full bg-background border rounded-lg h-9 pl-9 pr-4 text-[11px] font-medium outline-none focus:ring-2 focus:ring-primary/20"
-                                />
                             </div>
                         </div>
 

@@ -24,7 +24,20 @@ async def get_current_user(
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
         return user
+    except HTTPException:
+        raise
     except Exception as e:
+        error_str = str(e).lower()
+        # If the DB connection dropped during the request, don't blame the user's token!
+        # Return 503 instead of 401 to prevent the frontend from logging the user out.
+        is_db_error = any(msg in error_str for msg in ["operationalerror", "ssl", "connection slots", "reset by peer", "closed unexpectedly"])
+        
+        if is_db_error:
+            print(f"❌ DB Capacity/SSL Error during auth: {error_str}")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, 
+                detail="Database temporarily busy. Please try again."
+            )
         raise HTTPException(status_code=401, detail=str(e))
 
 async def get_current_user_role(token: str = Depends(oauth2_scheme)) -> str:

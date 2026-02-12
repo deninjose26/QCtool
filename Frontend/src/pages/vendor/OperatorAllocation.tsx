@@ -217,6 +217,35 @@ const OperatorAllocation: React.FC = () => {
     };
 
 
+    const handleDelete = async (id: string) => {
+        if (currentUser?.role !== 'SuperAdmin') {
+            toast({
+                title: 'Permission Denied',
+                description: 'Only Admins are permitted to delete records. Please contact Administrator.',
+                variant: 'destructive'
+            });
+            return;
+        }
+
+        if (!confirm('Are you sure you want to delete this operator allocation?')) return;
+
+        try {
+            const response = await apiFetch(`${API_BASE_URL}/vendor/operator-allocations/${id}`, {
+                method: 'DELETE'
+            });
+
+            if (response.ok) {
+                toast({ title: 'Success', description: 'Allocation deleted successfully' });
+                fetchData();
+            } else {
+                const error = await response.json();
+                toast({ title: 'Error', description: error.detail || 'Failed to delete allocation', variant: 'destructive' });
+            }
+        } catch (error) {
+            toast({ title: 'Error', description: 'Communication failed', variant: 'destructive' });
+        }
+    };
+
     const columns = [
         {
             key: 'operator_name',
@@ -254,6 +283,13 @@ const OperatorAllocation: React.FC = () => {
                         className="h-8 text-[10px] font-bold bg-emerald-500 text-white hover:bg-emerald-600 hover:text-white"
                     >
                         EDIT
+                    </Button>
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleDelete(item.id)}
+                    >
+                        <Trash2 className="h-4 w-4 text-destructive" />
                     </Button>
                 </div>
             )
@@ -361,13 +397,20 @@ const OperatorAllocation: React.FC = () => {
                     </div>
 
                     <DialogFooter>
-                        <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Cancel</Button>
+                        <Button variant="outline" onClick={() => setIsDialogOpen(false)} disabled={isSubmitting}>Cancel</Button>
                         <Button
                             onClick={handleAllocate}
                             disabled={!currentAllocation || !selectedOperator || isSubmitting}
-                            className="min-w-[120px]"
+                            className="min-w-[140px]"
                         >
-                            {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : (editingAllocation ? 'Update Allocation' : 'Allocate Resource')}
+                            {isSubmitting ? (
+                                <>
+                                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                                    {editingAllocation ? 'Updating...' : 'Allocating...'}
+                                </>
+                            ) : (
+                                editingAllocation ? 'Update Allocation' : 'Allocate Resource'
+                            )}
                         </Button>
                     </DialogFooter>
                 </DialogContent>

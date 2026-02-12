@@ -34,7 +34,6 @@ def send_welcome_email(to_email: str, name: str, username: str, password: str, r
             
             <div style="background-color: #f9fafb; padding: 15px; border-radius: 8px; margin: 20px 0;">
                 <p style="margin: 5px 0;"><strong>Username:</strong> {username}</p>
-                <p style="margin: 5px 0;"><strong>Password:</strong> {password}</p>
             </div>
             
             <p>Please log in and change your password as soon as possible for security reasons.</p>

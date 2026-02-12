@@ -20,6 +20,7 @@ import { Edit, Trash2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { API_BASE_URL } from '@/config';
+import PasswordStrength from '@/components/common/PasswordStrength';
 
 const QCUsers: React.FC = () => {
     // QC Supervisor can only see and manage QC Users
@@ -71,6 +72,18 @@ const QCUsers: React.FC = () => {
             if (!formData.name || !formData.email || (!editingUser && (!formData.username || !formData.password))) {
                 toast({ title: 'Error', description: 'Name, Username, Email are required. Password is required for new users.', variant: 'destructive' });
                 return;
+            }
+
+            if (!editingUser || formData.password) {
+                const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?\":{}|<>]).{8,}$/;
+                if (!passwordRegex.test(formData.password)) {
+                    toast({
+                        title: 'Weak Password',
+                        description: 'Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, one digit, and one special character.',
+                        variant: 'destructive'
+                    });
+                    return;
+                }
             }
 
             if (editingUser) {
@@ -130,12 +143,26 @@ const QCUsers: React.FC = () => {
     };
 
     const handleDelete = async (id: string) => {
+        if (user?.role !== 'SuperAdmin') {
+            toast({
+                title: 'Permission Denied',
+                description: 'Only Admins are permitted to delete records. Please contact Administrator.',
+                variant: 'destructive'
+            });
+            return;
+        }
+
+        if (!confirm('Are you sure you want to delete this QC User?')) return;
+
         try {
             const res = await apiFetch(`${API_BASE_URL}/qc-sup/qc-users/${id}`, {
                 method: 'DELETE'
             });
 
-            if (!res.ok) throw new Error('Failed to delete user');
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.detail || 'Failed to delete user');
+            }
 
             toast({ title: 'Success', description: 'QC User deleted successfully' });
             fetchUsers();
@@ -244,6 +271,7 @@ const QCUsers: React.FC = () => {
                                 onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                                 placeholder={editingUser ? "Leave blank to keep current" : "******"}
                             />
+                            <PasswordStrength password={formData.password} />
                             {editingUser && <p className="text-xs text-muted-foreground">Leave blank to keep current password. Enter new password to change.</p>}
                         </div>
                     </div>

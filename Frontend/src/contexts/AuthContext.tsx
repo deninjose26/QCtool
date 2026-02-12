@@ -17,6 +17,15 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(() => {
     const savedUser = localStorage.getItem('qc_user');
+    const token = localStorage.getItem('qc_token');
+
+    // If token is missing or is the string "null"/"undefined", treat as unauthenticated
+    if (!token || token === 'null' || token === 'undefined') {
+      localStorage.removeItem('qc_token');
+      localStorage.removeItem('qc_user');
+      return null;
+    }
+
     if (!savedUser) return null;
     try {
       const parsed = JSON.parse(savedUser);
@@ -43,30 +52,81 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   });
 
-  const logout = useCallback(() => {
-    localStorage.removeItem('qc_user');
-    localStorage.removeItem('qc_token');
-    localStorage.removeItem('token');
-    window.location.href = '/';
-  }, []);
-
   const apiFetch = useCallback(async (url: string, options: RequestInit = {}) => {
     const token = localStorage.getItem('qc_token');
 
     const headers = new Headers(options.headers || {});
-    if (token && !headers.has('Authorization')) {
+    // Only set Authorization if token exists and is not the literal string "null"
+    if (token && token !== 'null' && token !== 'undefined' && !headers.has('Authorization')) {
       headers.set('Authorization', `Bearer ${token}`);
     }
 
-    const response = await fetch(url, { ...options, headers });
+    const response = await fetch(url, {
+      ...options,
+      headers,
+      credentials: 'include'
+    });
 
     if (response.status === 401) {
-      console.warn('Unauthorized request detected. Token may be invalid.');
-      // throw new Error('Unauthorized - please check your session');
+      console.warn('Unauthorized request detected. Session may be expired.');
+      // 🛑 DISABLED: Do not log out automatically.
+      // Let the user re-login manually or wait for the next healthy request.
+      // This prevents "flickering logouts" during DB SSL drops.
     }
 
     return response;
   }, []);
+
+  const logout = useCallback(async () => {
+    try {
+      // 1. Pause any active uploads before logout
+      // Use a promise-based approach to ensure pause completes
+      const pausePromise = new Promise<void>((resolve) => {
+        const handlePauseComplete = () => {
+          window.removeEventListener('uploads-paused-complete', handlePauseComplete);
+          resolve();
+        };
+
+        window.addEventListener('uploads-paused-complete', handlePauseComplete);
+
+        // Dispatch pause event
+        const uploadPauseEvent = new CustomEvent('pause-uploads-before-logout');
+        window.dispatchEvent(uploadPauseEvent);
+
+        // Timeout after 2 seconds if no response
+        setTimeout(() => {
+          window.removeEventListener('uploads-paused-complete', handlePauseComplete);
+          resolve();
+        }, 2000);
+      });
+
+      // Wait for uploads to pause
+      await pausePromise;
+      console.log('✅ Upload pause confirmed');
+
+      // 2. Call backend logout endpoint to log the action
+      await apiFetch(`${API_BASE_URL}/auth/logout`, {
+        method: 'POST'
+      });
+    } catch (error) {
+      console.error('Logout API call failed:', error);
+      // Continue with logout even if API call fails
+    } finally {
+      // 3. Clear auth data but preserve upload queue in IndexedDB
+      // Only clear localStorage (auth token, user data)
+      // IndexedDB upload queue remains intact for auto-resume
+
+      localStorage.removeItem('qc_token');
+      localStorage.removeItem('qc_user');
+
+      // 🛑 EMERGENCY STOP: Kill any ghost upload processes
+      import('@/utils/uploadManager').then(m => m.UploadManager.stopAllInstances());
+
+      setUser(null);
+
+      console.log('🔐 Logged out - Upload queue preserved for resume after re-login');
+    }
+  }, [apiFetch]);
 
   const updateUser = useCallback((updates: Partial<User>) => {
     setUser((prev) => {
@@ -125,6 +185,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const response = await fetch(`${API_BASE_URL}/auth/login`, {
         method: 'POST',
         body: formData,
+        credentials: 'include',
       });
 
       if (response.ok) {

@@ -163,7 +163,7 @@ const AllocationHistory: React.FC = () => {
     };
 
     const handleRevoke = async (allocationId: string, batchId: string) => {
-        if (!window.confirm(`Are you sure you want to revoke allocation for batch ${batchId}? This will remove the batch from the QC user and make it available for reallocation. All progress made by the QC user on this batch will be cleared.`)) {
+        if (!window.confirm(`Are you sure you want to revoke allocation for batch ${batchId}? This will remove the batch from the QC user and make it available for reallocation.`)) {
             return;
         }
 
@@ -304,7 +304,7 @@ const AllocationHistory: React.FC = () => {
             header: 'Actions',
             render: (_: any, item: QCAllocationTask) => (
                 <div className="flex justify-end">
-                    {!['Completed', 'Verified', 'Verified_With_Rejection'].includes(item.qc_batch_status) ? (
+                    {item.qc_batch_status === 'Allocated' ? (
                         <Button
                             variant="outline"
                             size="sm"
@@ -314,10 +314,15 @@ const AllocationHistory: React.FC = () => {
                             <X className="h-3 w-3" />
                             Revoke
                         </Button>
-                    ) : (
+                    ) : ['Completed', 'Verified', 'Verified_With_Rejection'].includes(item.qc_batch_status) ? (
                         <Badge variant="outline" className="text-[9px] font-bold uppercase bg-slate-50 text-slate-500 border-slate-200">
                             <Shield className="h-2.5 w-2.5 mr-1" />
                             Finalized
+                        </Badge>
+                    ) : (
+                        <Badge variant="outline" className="text-[9px] font-bold uppercase bg-blue-50 text-blue-600 border-blue-200">
+                            <Clock className="h-2.5 w-2.5 mr-1" />
+                            In Progress
                         </Badge>
                     )}
                 </div>

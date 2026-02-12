@@ -4,6 +4,11 @@
 -- PostgreSQL Database
 -- ============================================
 
+-- CHANGELOG:
+-- 2026-01-31: Added UNIQUE constraint on upload.batch_uid for race condition prevention
+--             Added upload lock fields (locked_by, locked_at, locked_device, locked_ip, current_file_name)
+--             These changes ensure safe concurrent uploads from multiple users/locations
+
 -- Create schema (optional - adjust as needed)
 CREATE SCHEMA IF NOT EXISTS qc_portal;
 SET search_path TO qc_portal;
@@ -109,7 +114,7 @@ CREATE TABLE projects (
 CREATE INDEX idx_projects_code ON projects(project_code);
 
 -- Source Table
-CREATE TABLE source (
+CREATE TABLE source ( 
     source_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     project_id UUID NOT NULL REFERENCES projects(project_id),
     source_code VARCHAR(100) NOT NULL,
@@ -232,16 +237,33 @@ CREATE INDEX idx_batch_id ON batch(batch_id);
 CREATE INDEX idx_batch_operator ON batch(scanning_operator_allocation_id);
 
 -- Upload Table
+-- IMPORTANT: This table has been enhanced for multi-user concurrent upload safety
+-- Features:
+--   1. UNIQUE constraint on batch_uid prevents duplicate upload records (race condition fix)
+--   2. Upload lock fields prevent simultaneous uploads from multiple devices
+--   3. Atomic operations in code ensure accurate completed_count tracking
+-- Migration: run_migration.py adds the unique constraint to existing databases
 CREATE TABLE upload (
     upload_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    batch_uid UUID NOT NULL REFERENCES batch(batch_uid),
+    batch_uid UUID NOT NULL UNIQUE REFERENCES batch(batch_uid),  -- UNIQUE constraint added for race condition prevention
     completed_count INTEGER DEFAULT 0,
     s3_folder_path VARCHAR(500) NOT NULL,
     upload_status upload_status DEFAULT 'Pending',
     uploaded_by UUID NOT NULL REFERENCES users(user_id),
     upload_start_date TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'UTC' + INTERVAL '5 hours 30 minutes'),
     upload_end_date TIMESTAMP WITHOUT TIME ZONE,
-    last_updated TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'UTC' + INTERVAL '5 hours 30 minutes')
+    last_updated TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'UTC' + INTERVAL '5 hours 30 minutes'),
+    
+    -- Upload lock fields for multi-device prevention
+    locked_by UUID REFERENCES users(user_id),
+    locked_at TIMESTAMP WITHOUT TIME ZONE,
+    locked_device VARCHAR(255),
+    locked_device_id VARCHAR(255),
+    locked_ip VARCHAR(50),
+    current_file_name VARCHAR(255),
+    
+    -- Unique constraint name for reference
+    CONSTRAINT upload_batch_uid_unique UNIQUE (batch_uid)
 );
 
 CREATE INDEX idx_upload_batch ON upload(batch_uid);
@@ -312,6 +334,31 @@ CREATE INDEX idx_notifications_user ON notifications(user_id);
 CREATE INDEX idx_notifications_read ON notifications(is_read);
 CREATE INDEX idx_notifications_created ON notifications(created_date DESC);
 
+-- Audit Logs Table 
+CREATE TABLE audit_logs (
+    log_id SERIAL PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(user_id),
+    username VARCHAR(255) NOT NULL,
+    action VARCHAR(255) NOT NULL,
+    endpoint VARCHAR(500),
+    method VARCHAR(10),
+    ip_address VARCHAR(50),
+    payload TEXT,
+    result VARCHAR(50) DEFAULT 'success',
+    timestamp TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'UTC' + INTERVAL '5 hours 30 minutes')
+);
+
+CREATE INDEX idx_audit_logs_user ON audit_logs(user_id);
+CREATE INDEX idx_audit_logs_timestamp ON audit_logs(timestamp DESC);
+
+-- System Settings Table
+CREATE TABLE system_settings (
+    setting_id VARCHAR(100) PRIMARY KEY,
+    setting_value TEXT NOT NULL,
+    description TEXT,
+    last_updated TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'UTC' + INTERVAL '5 hours 30 minutes')
+);
+
 -- ============================================
 -- COMMENTS (Optional - for documentation)
 -- ============================================
@@ -331,24 +378,31 @@ COMMENT ON TABLE image IS 'Individual scanned images';
 COMMENT ON TABLE qc_allocation IS 'QC task assignments';
 COMMENT ON TABLE qc IS 'Quality control records for images';
 COMMENT ON TABLE notifications IS 'User notifications for workflow events';
+COMMENT ON TABLE audit_logs IS 'Audit trail of user actions for security and tracking';
+COMMENT ON TABLE system_settings IS 'Global application-wide configuration settings';
 
 -- ============================================
--- INITIAL DATA (Optional)
+-- INITIAL DATA
 -- ============================================
 
 -- Create default SuperAdmin user
 -- Password: 'admin123' (hashed with bcrypt)
--- IMPORTANT: Change this password immediately after first login!
+-- Using details consistent with bootstrap_admin.py
 INSERT INTO users (user_id, name, username, email, password_hash, user_role, is_active)
 VALUES (
     gen_random_uuid(),
-    'System Administrator',
+    'DJ',
     'admin',
-    'admin@qcportal.com',
+    'admin@familyaconnect.com',
     '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYIxIvicQNe', -- 'admin123'
     'SuperAdmin',
     TRUE
 );
+
+-- Initial System Settings
+INSERT INTO system_settings (setting_id, setting_value, description)
+VALUES ('enable_audit_logs', 'true', 'Global toggle for action audit logging');
+
 
 -- ============================================
 -- GRANT PERMISSIONS (Adjust as needed)
@@ -362,3 +416,8 @@ VALUES (
 -- ============================================
 -- END OF SCHEMA
 -- ============================================
+-- Reset the sequence to start from 1 again
+ALTER SEQUENCE qctool_schema.record_code_seq RESTART WITH 1;
+
+-- Verify it was reset
+SELECT 'B' || LPAD(nextval('qctool_schema.record_code_seq')::text, 6, '0') as next_record_code;

@@ -21,6 +21,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { formatError } from '@/lib/utils';
 import { API_BASE_URL } from '@/config';
+import PasswordStrength from '@/components/common/PasswordStrength';
 
 const Operators: React.FC = () => {
   const { user: currentUser } = useAuth();
@@ -101,6 +102,18 @@ const Operators: React.FC = () => {
       return;
     }
 
+    if (!editingOperator || formData.password) {
+      const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?\":{}|<>]).{8,}$/;
+      if (!passwordRegex.test(formData.password)) {
+        toast({
+          title: 'Weak Password',
+          description: 'Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, one digit, and one special character.',
+          variant: 'destructive'
+        });
+        return;
+      }
+    }
+
     try {
       const token = localStorage.getItem('qc_token');
       let response;
@@ -154,6 +167,15 @@ const Operators: React.FC = () => {
   };
 
   const handleDelete = async (id: string) => {
+    if (currentUser?.role !== 'SuperAdmin') {
+      toast({
+        title: 'Permission Denied',
+        description: 'Only Admins are permitted to delete records. Please contact Administrator.',
+        variant: 'destructive'
+      });
+      return;
+    }
+
     if (!confirm('Are you sure you want to delete this operator?')) return;
     try {
       const token = localStorage.getItem('qc_token');
@@ -162,11 +184,15 @@ const Operators: React.FC = () => {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (response.ok) {
-        toast({ title: 'Success', description: 'Operator deleted' });
+        toast({ title: 'Success', description: 'Operator deleted successfully' });
         fetchOperators();
+      } else {
+        const error = await response.json();
+        toast({ title: 'Error', description: error.detail || 'Failed to delete operator', variant: 'destructive' });
       }
     } catch (error) {
-      toast({ title: 'Error', description: 'Failed to delete', variant: 'destructive' });
+      console.error('Delete error:', error);
+      toast({ title: 'Error', description: 'An unexpected error occurred', variant: 'destructive' });
     }
   };
 
@@ -198,6 +224,9 @@ const Operators: React.FC = () => {
         <div className="flex gap-2">
           <Button variant="ghost" size="icon" onClick={() => handleEdit(item)}>
             <Edit className="h-4 w-4" />
+          </Button>
+          <Button variant="ghost" size="icon" onClick={() => handleDelete(item.id)}>
+            <Trash2 className="h-4 w-4 text-destructive" />
           </Button>
         </div>
       )
@@ -290,6 +319,7 @@ const Operators: React.FC = () => {
                 </div>
               </div>
             </div>
+            <PasswordStrength password={formData.password} />
 
             {editingOperator && (
               <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/30">

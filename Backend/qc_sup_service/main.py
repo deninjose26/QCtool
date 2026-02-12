@@ -11,7 +11,7 @@ from common.models import (
     RecordName, VendorAllocation, get_ist_now
 )
 from common.auth_utils import get_current_user, role_required
-from common.security import get_password_hash
+from common.security import get_password_hash, validate_password_strength
 from common.notification_utils import create_notification
 from common.models import NotificationType
 
@@ -72,6 +72,7 @@ def update_qc_user(
     current_user: User = Depends(get_current_user)
 ):
     """Update a QC User created by this supervisor"""
+    from common.audit_logger import log_action
     if current_user.user_role != UserRole.QC_Supervisor:
         raise HTTPException(status_code=403, detail="Access denied")
         
@@ -82,20 +83,48 @@ def update_qc_user(
     if user.created_by != current_user.user_id:
         raise HTTPException(status_code=403, detail="You can only update users you created")
     
+    changes = {}
+
     if user_data.name:
+        if user.name != user_data.name:
+            changes["name"] = {"old": user.name, "new": user_data.name}
         user.name = user_data.name
     if user_data.email:
         if user_data.email != user.email:
             existing = session.exec(select(User).where(User.email == user_data.email)).first()
             if existing:
                 raise HTTPException(status_code=400, detail="Email already registered")
+            changes["email"] = {"old": user.email, "new": user_data.email}
         user.email = user_data.email
     if user_data.password:
+        if not validate_password_strength(user_data.password):
+            raise HTTPException(
+                status_code=400,
+                detail="Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, one digit, and one special character."
+            )
         user.password_hash = get_password_hash(user_data.password)
+        changes["password"] = "Updated"
         
     session.add(user)
     session.commit()
     session.refresh(user)
+
+    # Log the action
+    if changes:
+        log_action(
+            session=session,
+            user_id=current_user.user_id,
+            username=current_user.username,
+            action="QC User Updated",
+            endpoint=f"/qc-sup/qc-users/{user_id}",
+            method="PUT",
+            payload={
+                "target_user_id": str(user_id),
+                "target_username": user.username,
+                "changes": changes
+            },
+            result="success"
+        )
     
     return QCUserRead(
         user_id=user.user_id,
@@ -113,19 +142,36 @@ def delete_qc_user(
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
-    """Delete a QC User created by this supervisor"""
-    if current_user.user_role != UserRole.QC_Supervisor:
-        raise HTTPException(status_code=403, detail="Access denied")
+    """Delete a QC User (Admin only)"""
+    from common.audit_logger import log_action
+    if current_user.user_role != UserRole.SuperAdmin:
+        raise HTTPException(status_code=403, detail="Forbidden: Only SuperAdmins can delete users.")
         
     user = session.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-        
-    if user.created_by != current_user.user_id:
-        raise HTTPException(status_code=403, detail="You can only delete users you created")
-        
+    
+    username = user.username
+    name = user.name
+
     session.delete(user)
     session.commit()
+
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="QC User Deleted",
+        endpoint=f"/qc-sup/qc-users/{user_id}",
+        method="DELETE",
+        payload={
+            "target_user_id": str(user_id),
+            "target_username": username,
+            "target_name": name
+        },
+        result="success"
+    )
     
     return {"message": "QC User deleted successfully"}
 
@@ -269,6 +315,7 @@ def allocate_batch(
     current_user: User = Depends(get_current_user)
 ):
     """Allocate a batch to a QC User"""
+    from common.audit_logger import log_action
     if current_user.user_role != UserRole.QC_Supervisor:
         raise HTTPException(status_code=403, detail="Access denied")
         
@@ -327,7 +374,7 @@ def allocate_batch(
         create_notification(
             session=session,
             user_id=allocation.qc_user_id,
-            notif_type=NotificationType.QC_Assigned,
+            notif_type=NotificationType.qc_assigned,
             title="New QC Task Assigned",
             message=f"Supervisor {current_user.name} has assigned Batch {batch.batch_id} to you for quality check.",
             link="/tasks"  # QC user tasks page
@@ -336,6 +383,24 @@ def allocate_batch(
         print(f"⚠️ Failed to create notification: {e}")
         
     session.commit()
+
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Batch Allocated to QC",
+        endpoint="/qc-sup/allocate",
+        method="POST",
+        payload={
+            "batch_uid": str(allocation.batch_uid),
+            "batch_id": batch.batch_id,
+            "qc_user_id": str(allocation.qc_user_id),
+            "qc_user_name": qc_user.name
+        },
+        result="success"
+    )
+
     return {"message": f"Batch allocated successfully with {len(images)} images ready for QC"}
 
 @router.delete("/revoke-allocation/{allocation_id}")
@@ -345,6 +410,7 @@ def revoke_allocation(
     current_user: User = Depends(get_current_user)
 ):
     """Revoke a QC allocation (Supervisor only)"""
+    from common.audit_logger import log_action
     if current_user.user_role != UserRole.QC_Supervisor:
         raise HTTPException(status_code=403, detail="Access denied")
     
@@ -353,10 +419,19 @@ def revoke_allocation(
     if not allocation:
         raise HTTPException(status_code=404, detail="Allocation not found")
         
-    # Check if already completed?
-    # Usually we revoke things that are in Allocated, QC_Pending, or QC_In_Progress
-    if allocation.qc_batch_status in [QCBatchStatus.Completed, QCBatchStatus.Verified, QCBatchStatus.Verified_With_Rejection]:
-         raise HTTPException(status_code=400, detail="Cannot revoke a completed or verified batch")
+    # Only allow revoking batches that are in 'Allocated' status (not started yet)
+    # This prevents accidental deletion of work in progress
+    if allocation.qc_batch_status != QCBatchStatus.Allocated:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Cannot revoke batch in '{allocation.qc_batch_status.value}' status. Only 'Allocated' batches (not yet started) can be revoked."
+        )
+
+    # Get batch details for logging
+    batch = session.get(Batch, allocation.batch_uid)
+    batch_id = batch.batch_id if batch else "Unknown"
+    qc_user = session.get(User, allocation.allocated_to_qc_user)
+    qc_user_name = qc_user.name if qc_user else "Unknown"
 
     from sqlalchemy import delete
     from sqlmodel import col
@@ -368,6 +443,22 @@ def revoke_allocation(
     # Delete the allocation itself
     session.delete(allocation)
     session.commit()
+
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Batch QC Revoked",
+        endpoint=f"/qc-sup/revoke-allocation/{allocation_id}",
+        method="DELETE",
+        payload={
+            "allocation_id": str(allocation_id),
+            "batch_id": batch_id,
+            "qc_user_name": qc_user_name
+        },
+        result="success"
+    )
     
     return {"message": "Allocation revoked successfully"}
 
@@ -700,16 +791,22 @@ def update_qc_status(
     current_user: User = Depends(get_current_user)
 ):
     """Update QC status and remarks for a specific image (Supervisor only)"""
+    from common.audit_logger import log_action
     if current_user.user_role != UserRole.QC_Supervisor:
         raise HTTPException(status_code=403, detail="Access denied")
     
-    from common.models import QC, QCStatus
+    from common.models import QC, QCStatus, Image
     
     # Get the QC record
     qc_record = session.get(QC, qc_id)
     if not qc_record:
         raise HTTPException(status_code=404, detail="QC record not found")
     
+    # Get image for logging
+    image = session.get(Image, qc_record.image_id)
+    image_name = image.image_name if image else "Unknown"
+    old_status = qc_record.qc_status.value
+
     # Update the QC status
     try:
         qc_record.qc_status = QCStatus(update_data.qc_status)
@@ -729,6 +826,24 @@ def update_qc_status(
     session.add(qc_record)
     session.commit()
     session.refresh(qc_record)
+
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="QC Status Overridden",
+        endpoint=f"/qc-sup/update-qc-status/{qc_id}",
+        method="PUT",
+        payload={
+            "qc_id": str(qc_id),
+            "image_name": image_name,
+            "old_status": old_status,
+            "new_status": qc_record.qc_status.value,
+            "remarks": qc_record.remarks
+        },
+        result="success"
+    )
     
     return {
         "message": "QC status updated successfully",
@@ -743,6 +858,7 @@ def verify_batch(
     current_user: User = Depends(get_current_user)
 ):
     """Verify a completed QC batch by supervisor and create rework batch if rejections exist"""
+    from common.audit_logger import log_action
     if current_user.user_role != UserRole.QC_Supervisor:
         raise HTTPException(status_code=403, detail="Access denied")
     
@@ -818,8 +934,6 @@ def verify_batch(
     if rejected_count > 0:
         try:
             # Notify Vendor that a batch requires rework
-            vendor_alloc = session.get(VendorAllocation, original_batch.scanning_operator_allocation_id) # Wait, need vendor allocation
-            # Actually ScanningOperatorAllocation has vendor_allocation_id
             op_alloc = session.get(ScanningOperatorAllocation, original_batch.scanning_operator_allocation_id)
             if op_alloc:
                 vendor_alloc = session.get(VendorAllocation, op_alloc.vendor_allocation_id)
@@ -827,7 +941,7 @@ def verify_batch(
                     create_notification(
                         session=session,
                         user_id=vendor_alloc.allocated_to_vendor,
-                        notif_type=NotificationType.Batch_Rejected,
+                        notif_type=NotificationType.batch_rejected,
                         title="Batch Rejected (Rework Required)",
                         message=f"Batch {original_batch.batch_id} has {rejected_count} rejections. Rework Batch {rework_batch_id} has been created and requires your approval.",
                         link="/reallocation"  # Vendor rework batches page
@@ -836,6 +950,24 @@ def verify_batch(
             print(f"⚠️ Failed to create notification: {e}")
 
     session.commit()
+
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Batch Verified",
+        endpoint=f"/qc-sup/verify-batch/{batch_uid}",
+        method="POST",
+        payload={
+            "batch_uid": str(batch_uid),
+            "batch_id": original_batch.batch_id,
+            "status": allocation.qc_batch_status.value,
+            "rejected_count": rejected_count,
+            "rework_batch_id": rework_batch_id
+        },
+        result="success"
+    )
     
     return {
         "message": "Batch verified successfully", 

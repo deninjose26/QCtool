@@ -8,9 +8,10 @@ from apscheduler.triggers.cron import CronTrigger
 from datetime import datetime, timedelta
 from sqlmodel import Session, select
 from common.database import engine
-from common.models import User, Batch, QCAllocation, UserRole
+from common.models import User, Batch, QCAllocation, UserRole, get_ist_now
 from common.email_notifications import send_daily_upload_summary_email, send_daily_qc_summary_email
-from common.utils import get_ist_now
+from common.system_logger import cleanup_old_logs
+# from common.utils import get_ist_now  -- Fixed: This module does not exist
 import logging
 
 logger = logging.getLogger(__name__)
@@ -169,6 +170,14 @@ def start_scheduler():
         CronTrigger(hour=9, minute=0, timezone='Asia/Kolkata'),
         id='daily_qc_reports',
         name='Send daily QC summary emails',
+        replace_existing=True
+    )
+    
+    scheduler.add_job(
+        cleanup_old_logs,
+        CronTrigger(hour=0, minute=0, timezone='Asia/Kolkata'),
+        id='system_logs_cleanup',
+        name='Clean up system logs older than 30 days',
         replace_existing=True
     )
     

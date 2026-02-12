@@ -38,7 +38,7 @@ import {
     RefreshCw
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { API_BASE_URL, S3_BASE_URL } from '@/config';
+import { API_BASE_URL } from '@/config';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -269,7 +269,7 @@ const QCReview: React.FC = () => {
                         <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => navigate('/qc-history')}
+                            onClick={() => navigate('/qc-review-queue')}
                             className="gap-2"
                         >
                             <ArrowLeft className="h-4 w-4" />

@@ -149,14 +149,32 @@ const RecordTypes: React.FC = () => {
     };
 
     const handleDelete = async (id: string) => {
-        if (!confirm('Are you sure?')) return;
+        if (user?.role !== 'SuperAdmin') {
+            toast({
+                title: 'Permission Denied',
+                description: 'Only Admins are permitted to delete records. Please contact Administrator.',
+                variant: 'destructive'
+            });
+            return;
+        }
+
+        if (!confirm('Are you sure you want to delete this record type?')) return;
         try {
             const response = await fetch(`${API_BASE_URL}/admin/record-types/${id}`, {
                 method: 'DELETE',
                 headers: { 'Authorization': `Bearer ${localStorage.getItem('qc_token')}` }
             });
-            if (response.ok) { toast({ title: 'Deleted' }); fetchData(); }
-        } catch (error) { console.error('Delete error:', error); }
+            if (response.ok) {
+                toast({ title: 'Success', description: 'Record type deleted successfully' });
+                fetchData();
+            } else {
+                const error = await response.json();
+                toast({ title: 'Error', description: error.detail || 'Failed to delete record type', variant: 'destructive' });
+            }
+        } catch (error) {
+            console.error('Delete error:', error);
+            toast({ title: 'Error', description: 'An unexpected error occurred', variant: 'destructive' });
+        }
     };
 
     const columns = [
@@ -192,7 +210,7 @@ const RecordTypes: React.FC = () => {
 
     return (
         <div className="space-y-6 animate-fade-in">
-            <PageHeader title="Record Types (Upload Sup)" description="Manage document types" action={{ label: 'Add Type', onClick: handleCreate }} />
+            <PageHeader title="Record Types" description="Manage document types" action={{ label: 'Add Record Type', onClick: handleCreate }} />
             {isLoading ? (
                 <div className="flex flex-col items-center justify-center h-64"><Loader2 className="h-8 w-8 animate-spin" /><p>Loading...</p></div>
             ) : (

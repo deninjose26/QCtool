@@ -17,6 +17,29 @@ from pydantic import BaseModel
 from sqlalchemy.orm import aliased
 from sqlalchemy import func
 
+import boto3
+import os
+from botocore.client import Config
+
+# Initialize S3 clients once at module level to avoid overhead on every request
+qc_s3_client = boto3.client(
+    's3',
+    endpoint_url=os.getenv('QC_ENDPOINT_URL'),
+    aws_access_key_id=os.getenv('QC_AWS_ACCESS_KEY_ID'),
+    aws_secret_access_key=os.getenv('QC_AWS_SECRET_ACCESS_KEY'),
+    region_name=os.getenv('QC_AWS_REGION'),
+    config=Config(signature_version='s3v4')
+)
+
+original_s3_client = boto3.client(
+    's3',
+    endpoint_url=os.getenv('ENDPOINT_URL'),
+    aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+    aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+    region_name=os.getenv('AWS_REGION'),
+    config=Config(signature_version='s3v4')
+)
+
 router = APIRouter(prefix="/qc", tags=["QC User Operations"])
 
 class QCUserTask(BaseModel):
@@ -205,7 +228,7 @@ def get_my_history(
 def get_batch_images(
     batch_uid: UUID,
     filter_status: Optional[str] = None,
-    limit: int = 100,
+    limit: int = 200,
     offset: int = 0,
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
@@ -222,34 +245,30 @@ def get_batch_images(
         raise HTTPException(status_code=404, detail="Batch not found or not allocated to you")
     
     # Auto-create missing QC records if any (robustness fix)
-    from sqlalchemy import func
-    from common.models import QC, QCStatus, Image
+    # Using a single set-based query to find missing images instead of a loop
+    missing_images_stmt = (
+        select(Image.image_id)
+        .where(Image.batch_uid == batch_uid)
+        .where(
+            Image.image_id.not_in(
+                select(QC.image_id).where(QC.qc_allocation_id == allocation.qc_allocation_id)
+            )
+        )
+    )
+    missing_image_ids = session.exec(missing_images_stmt).all()
     
-    # Get all images for this batch
-    all_images = session.exec(select(Image).where(Image.batch_uid == batch_uid)).all()
-    # Get count of existing QC records for this allocation
-    qc_count = session.exec(
-        select(func.count(QC.qc_id))
-        .where(QC.qc_allocation_id == allocation.qc_allocation_id)
-    ).first() or 0
-    
-    if len(all_images) > qc_count:
-        # Some images are missing QC records for this allocation, create them
-        for img in all_images:
-            existing_qc = session.exec(
-                select(QC)
-                .where(QC.qc_allocation_id == allocation.qc_allocation_id)
-                .where(QC.image_id == img.image_id)
-            ).first()
-            if not existing_qc:
-                session.add(QC(
-                    qc_allocation_id=allocation.qc_allocation_id,
-                    image_id=img.image_id,
-                    qc_status=QCStatus.Pending
-                ))
+    if missing_image_ids:
+        print(f"[QC-INIT] Creating {len(missing_image_ids)} missing QC records for batch {batch_uid}")
+        new_records = [
+            QC(
+                qc_allocation_id=allocation.qc_allocation_id,
+                image_id=img_id,
+                qc_status=QCStatus.Pending
+            )
+            for img_id in missing_image_ids
+        ]
+        session.add_all(new_records)
         session.commit()
-        # Refresh allocation if needed (not strictly required here but good practice)
-        session.refresh(allocation)
 
     # Build base query
     statement = (
@@ -276,42 +295,21 @@ def get_batch_images(
     
     results = session.exec(statement).all()
     
-    # Import S3 client
-    import boto3
-    import os
-    from botocore.client import Config
-    
-    # Initialize S3 clients for both buckets
-    qc_s3_client = boto3.client(
-        's3',
-        endpoint_url=os.getenv('QC_ENDPOINT_URL'),
-        aws_access_key_id=os.getenv('QC_AWS_ACCESS_KEY_ID'),
-        aws_secret_access_key=os.getenv('QC_AWS_SECRET_ACCESS_KEY'),
-        region_name=os.getenv('QC_AWS_REGION'),
-        config=Config(signature_version='s3v4')
-    )
-    
-    original_s3_client = boto3.client(
-        's3',
-        endpoint_url=os.getenv('ENDPOINT_URL'),
-        aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-        aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
-        region_name=os.getenv('AWS_REGION'),
-        config=Config(signature_version='s3v4')
-    )
-    
     images = []
+    qc_bucket_name = os.getenv('QC_S3_BUCKET_NAME')
+    original_bucket_name = os.getenv('S3_BUCKET_NAME')
+    
     for qc, img in results:
         # Generate presigned URLs
         qc_url = None
         if img.qc_s3_path:
             try:
                 # Remove bucket name from path if present
-                qc_key = img.qc_s3_path.replace(f"{os.getenv('QC_S3_BUCKET_NAME')}/", "")
+                qc_key = img.qc_s3_path.replace(f"{qc_bucket_name}/", "")
                 qc_url = qc_s3_client.generate_presigned_url(
                     'get_object',
                     Params={
-                        'Bucket': os.getenv('QC_S3_BUCKET_NAME'),
+                        'Bucket': qc_bucket_name,
                         'Key': qc_key
                     },
                     ExpiresIn=3600  # 1 hour
@@ -319,13 +317,14 @@ def get_batch_images(
             except Exception as e:
                 print(f"Error generating QC presigned URL: {e}")
         
-        # Generate presigned URL for original image
+        # Generate presigned URL for original image (Used for fallback/details)
+        original_url = None
         try:
-            original_key = img.original_s3_path.replace(f"{os.getenv('S3_BUCKET_NAME')}/", "")
+            original_key = img.original_s3_path.replace(f"{original_bucket_name}/", "")
             original_url = original_s3_client.generate_presigned_url(
                 'get_object',
                 Params={
-                    'Bucket': os.getenv('S3_BUCKET_NAME'),
+                    'Bucket': original_bucket_name,
                     'Key': original_key
                 },
                 ExpiresIn=3600  # 1 hour
@@ -346,12 +345,37 @@ def get_batch_images(
             "conversion_status": img.conversion_status
         })
     
+    # Get global statistics for this allocation (only for images currently in the batch)
+    stats_statement = (
+        select(QC.qc_status, func.count(QC.qc_id))
+        .join(Image, QC.image_id == Image.image_id)
+        .where(QC.qc_allocation_id == allocation.qc_allocation_id)
+        .where(Image.batch_uid == batch_uid)
+        .group_by(QC.qc_status)
+    )
+    stats_results = session.exec(stats_statement).all()
+    
+    pending_count = 0
+    accepted_count = 0
+    rejected_count = 0
+    
+    for status, count in stats_results:
+        if status == QCStatus.Pending:
+            pending_count = count
+        elif status == QCStatus.Approved:
+            accepted_count = count
+        elif status == QCStatus.Rejected:
+            rejected_count = count
+
     return {
         "images": images,
         "total": total_count,
         "limit": limit,
         "offset": offset,
-        "has_more": (offset + limit) < total_count
+        "has_more": (offset + limit) < total_count,
+        "pending_count": pending_count,
+        "accepted_count": accepted_count,
+        "rejected_count": rejected_count
     }
 
 @router.post("/decision/{qc_id}")
@@ -362,6 +386,7 @@ def submit_qc_decision(
     current_user: User = Depends(get_current_user)
 ):
     """Submit QC decision for an image"""
+    from common.audit_logger import log_action
     qc = session.get(QC, qc_id)
     if not qc:
         raise HTTPException(status_code=404, detail="QC record not found")
@@ -371,6 +396,11 @@ def submit_qc_decision(
     if not allocation or allocation.allocated_to_qc_user != current_user.user_id:
         raise HTTPException(status_code=403, detail="Not authorized")
     
+    # Get image name for logging
+    image = session.get(Image, qc.image_id)
+    image_name = image.image_name if image else "Unknown"
+    old_status = qc.qc_status.value
+
     # Update QC record
     qc.qc_status = decision.qc_status
     qc.orientation_error = decision.orientation_error
@@ -382,15 +412,46 @@ def submit_qc_decision(
         qc.remarks = decision.remarks
         
     qc.qc_date = get_ist_now()
-    
     session.add(qc)
     
     # Update allocation status if needed
     if allocation.qc_batch_status == QCBatchStatus.Allocated:
         allocation.qc_batch_status = QCBatchStatus.QC_In_Progress
         session.add(allocation)
+        
+        # Log QC Started
+        log_action(
+            session=session,
+            user_id=current_user.user_id,
+            username=current_user.username,
+            action="QC Started",
+            endpoint=f"/qc/decision/{qc_id}",
+            method="POST",
+            payload={
+                "allocation_id": str(qc.qc_allocation_id),
+                "batch_uid": str(allocation.batch_uid)
+            },
+            result="success"
+        )
     
     session.commit()
+
+    # Log the action (Optional: might be noisy, but good for critical audits)
+    # log_action(
+    #     session=session,
+    #     user_id=current_user.user_id,
+    #     username=current_user.username,
+    #     action="Image QC Updated",
+    #     endpoint=f"/qc/decision/{qc_id}",
+    #     method="POST",
+    #     payload={
+    #         "qc_id": str(qc_id),
+    #         "image_name": image_name,
+    #         "old_status": old_status,
+    #         "new_status": qc.qc_status.value
+    #     },
+    #     result="success"
+    # )
     
     return {"message": "QC decision recorded successfully"}
 
@@ -401,6 +462,7 @@ def complete_qc_task(
     current_user: User = Depends(get_current_user)
 ):
     """Mark a QC allocation as completed"""
+    from common.audit_logger import log_action
     allocation = session.get(QCAllocation, allocation_id)
     if not allocation:
         raise HTTPException(status_code=404, detail="Allocation not found")
@@ -415,16 +477,16 @@ def complete_qc_task(
     allocation.qc_completed_date = get_ist_now()
     session.add(allocation)
     
+    # Get batch ID for naming/logging
+    batch = session.get(Batch, allocation.batch_uid)
+    batch_id_str = batch.batch_id if batch else "Unknown"
+
     # --- Trigger Notification ---
     try:
-        # Get batch ID for message
-        batch = session.get(Batch, allocation.batch_uid)
-        batch_id_str = batch.batch_id if batch else "Unknown"
-        
         create_notification(
             session=session,
             user_id=allocation.allocated_by_supervisor,
-            notif_type=NotificationType.Conversion_Complete, # Reusing for verification ready
+            notif_type=NotificationType.conversion_complete, # Reusing for verification ready
             title="QC Task Completed",
             message=f"QC User {current_user.name} has completed quality check for Batch {batch_id_str}. Ready for your verification.",
             link="/qc-review-queue"  # QC Supervisor review queue
@@ -433,6 +495,21 @@ def complete_qc_task(
         print(f"⚠️ Failed to create notification: {e}")
 
     session.commit()
+
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="QC Task Completed",
+        endpoint=f"/qc/complete-task/{allocation_id}",
+        method="POST",
+        payload={
+            "allocation_id": str(allocation_id),
+            "batch_id": batch_id_str
+        },
+        result="success"
+    )
     
     return {"message": "QC Task marked as completed successfully"}
 @router.get("/export-batch/{batch_uid}")

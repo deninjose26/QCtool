@@ -12,6 +12,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { User, Camera, Lock, Mail, Loader2 } from 'lucide-react';
 import { API_BASE_URL } from '@/config';
 import defaultAvatar from '@/assets/default-avatar.png';
+import PasswordStrength from '@/components/common/PasswordStrength';
 
 const Profile: React.FC = () => {
     const { user, apiFetch, refreshProfile } = useAuth();
@@ -31,7 +32,8 @@ const Profile: React.FC = () => {
     });
 
     // Password Form
-    const { register: registerPassword, handleSubmit: handlePasswordSubmit, reset: resetPassword } = useForm();
+    const { register: registerPassword, handleSubmit: handlePasswordSubmit, reset: resetPassword, watch: watchPassword } = useForm();
+    const newPassword = watchPassword('new_password', '');
 
     const getInitials = (name: string) => {
         return name
@@ -68,6 +70,16 @@ const Profile: React.FC = () => {
     const onPasswordChange = async (data: any) => {
         if (data.new_password !== data.confirm_password) {
             toast({ title: 'Error', description: 'New passwords do not match.', variant: 'destructive' });
+            return;
+        }
+
+        const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?\":{}|<>]).{8,}$/;
+        if (!passwordRegex.test(data.new_password)) {
+            toast({
+                title: 'Weak Password',
+                description: 'Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, one digit, and one special character.',
+                variant: 'destructive'
+            });
             return;
         }
 
@@ -241,6 +253,7 @@ const Profile: React.FC = () => {
                                         </div>
                                     </div>
                                 </div>
+                                <PasswordStrength password={newPassword} />
                                 <div className="pt-2 flex justify-end">
                                     <Button type="submit" disabled={updatingPassword} variant="outline" className="border-slate-200 text-slate-700 hover:bg-slate-50 font-bold">
                                         {updatingPassword && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
