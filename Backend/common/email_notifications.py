@@ -31,7 +31,7 @@ def _send_email(to_email: str, subject: str, html_body: str) -> bool:
     msg.attach(msg_html)
 
     # Attach the logo
-    logo_path = r"e:\QCtool\Frontend\src\assets\logo.png"
+    logo_path = os.getenv("EMAIL_LOGO_PATH", os.path.join(os.path.dirname(__file__), '..', '..', 'Frontend', 'src', 'assets', 'logo.png'))
     if os.path.exists(logo_path):
         with open(logo_path, 'rb') as f:
             logo_img = MIMEImage(f.read())

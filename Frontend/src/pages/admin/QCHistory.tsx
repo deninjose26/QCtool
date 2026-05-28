@@ -218,11 +218,15 @@ const AdminQCHistory: React.FC = () => {
                 data,
                 `Detailed_Report_${task.batch_id}`,
                 {
-                    image_name: 'Image Name',
-                    qc_status: 'QC Status',
+                    record_owner_name: 'Pandit Name',
+                    record_name: 'Bahi Name',
+                    location_name: 'Location',
+                    image_name: 'Image Number',
+                    qc_status: 'Status',
                     orientation_error: 'Orientation Issue',
                     remarks: 'Remarks / Rejection Reason',
-                    qc_date: 'QC Date'
+                    qc_date: 'Date',
+                    batch_id: 'Batch ID'
                 }
             );
         } catch (error) {
@@ -231,6 +235,41 @@ const AdminQCHistory: React.FC = () => {
                 description: 'Could not generate batch report',
                 variant: 'destructive'
             });
+        }
+    };
+
+    const handleCombinedReport = async () => {
+        try {
+            const params = new URLSearchParams();
+            if (dateRange?.from) params.set('date_from', format(dateRange.from, 'yyyy-MM-dd'));
+            if (dateRange?.to) params.set('date_to', format(dateRange.to, 'yyyy-MM-dd'));
+
+            const res = await apiFetch(`${API_BASE_URL}/qc/export-combined-report?${params.toString()}`);
+            if (!res.ok) throw new Error('Failed to fetch combined report');
+            const data = await res.json();
+
+            if (data.length === 0) {
+                toast({ title: 'No Data', description: 'No QC records found for the selected filters.' });
+                return;
+            }
+
+            exportToExcel(
+                data,
+                'Combined_QC_Report',
+                {
+                    record_owner_name: 'Pandit Name',
+                    record_name: 'Bahi Name',
+                    location_name: 'Location',
+                    image_name: 'Image Number',
+                    qc_status: 'Status',
+                    orientation_error: 'Orientation Issue',
+                    remarks: 'Remarks',
+                    qc_date: 'Date',
+                    batch_id: 'Batch ID'
+                }
+            );
+        } catch (error) {
+            toast({ title: 'Error', description: 'Could not generate combined report', variant: 'destructive' });
         }
     };
 
@@ -390,6 +429,14 @@ const AdminQCHistory: React.FC = () => {
                     >
                         <Download className="h-4 w-4" />
                         Export Master Log
+                    </Button>
+
+                    <Button
+                        onClick={handleCombinedReport}
+                        className="bg-blue-600 hover:bg-blue-700 shadow-lg shadow-blue-600/20 gap-2 h-9"
+                    >
+                        <FileText className="h-4 w-4" />
+                        Combined Report
                     </Button>
 
                     <Button

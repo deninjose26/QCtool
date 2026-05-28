@@ -40,13 +40,15 @@ def get_unread_count(
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
-    """Get the count of unread notifications."""
-    statement = select(Notification).where(
-        Notification.user_id == current_user.user_id,
-        Notification.is_read == False
-    )
-    results = session.exec(statement).all()
-    return {"count": len(results)}
+    """Get the count of unread notifications using SQL COUNT (optimized)."""
+    from sqlalchemy import func
+    count = session.exec(
+        select(func.count(Notification.notification_id)).where(
+            Notification.user_id == current_user.user_id,
+            Notification.is_read == False
+        )
+    ).first() or 0
+    return {"count": count}
 
 @router.patch("/{notification_id}/read")
 def mark_as_read(

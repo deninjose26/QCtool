@@ -56,7 +56,7 @@ if USE_PGBOUNCER:
         cursor.execute(f"SET search_path TO {DB_SCHEMA}")
         cursor.close()
 else:
-    print(f"🟢 Direct PostgreSQL Connection ({DB_PORT}) - EMERGENCY MODE")
+    print(f"Direct PostgreSQL Connection ({DB_PORT}) - EMERGENCY MODE")
     engine = create_engine(
         DATABASE_URL, 
         echo=False,

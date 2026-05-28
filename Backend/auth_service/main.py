@@ -122,13 +122,12 @@ def register(
         result="success"
     )
     
-    # Send welcome email in background
+    # Send welcome email in background (no password included for security)
     background_tasks.add_task(
         send_welcome_email,
         to_email=db_user.email,
         name=db_user.name,
         username=db_user.username,
-        password=user_data.password,
         role=db_user.user_role
     )
     
@@ -139,19 +138,31 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), session: Session = D
     from common.audit_logger import log_action
     
     user = session.exec(select(User).where(User.username == form_data.username)).first()
-    if not user or not verify_password(form_data.password, user.password_hash):
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    import logging
+    logger = logging.getLogger('auth_service')
+
+    password_valid = verify_password(form_data.password, user.password_hash)
+    logger.info(f"Login {'success' if password_valid else 'failure'} for {user.username}")
+    
+    if not password_valid:
         # Log failed login attempt
-        if user:
-            log_action(
-                session=session,
-                user_id=user.user_id,
-                username=user.username,
-                action="Login Failed",
-                endpoint="/auth/login",
-                method="POST",
-                payload={"reason": "Invalid password"},
-                result="failure"
-            )
+        log_action(
+            session=session,
+            user_id=user.user_id,
+            username=user.username,
+            action="Login Failed",
+            endpoint="/auth/login",
+            method="POST",
+            payload={"reason": "Invalid password"},
+            result="failure"
+        )
         
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

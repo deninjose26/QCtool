@@ -116,7 +116,7 @@ export default defineConfig(({ mode }) => ({
         ]
       },
       devOptions: {
-        enabled: false, // Disable PWA in DEV to prevent reload/cache issues
+        enabled: true, // Enable PWA in DEV to allow install prompt
         type: 'module'
       }
     })

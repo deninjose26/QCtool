@@ -26,6 +26,7 @@ export interface BatchQueue {
     status: BatchStatus;
     is_reupload: boolean;
     directory_handle?: any;
+    last_heartbeat?: Date;
     created_at: Date;
     updated_at: Date;
 }
@@ -202,7 +203,7 @@ export async function getActiveBatch(user_id: string) {
     return await db.batch_queue
         .where('user_id')
         .equals(user_id)
-        .filter(b => b.status === 'in_progress' || b.status === 'uploading')
+        .filter(b => b.status === 'in_progress' || b.status === 'uploading' || b.status === 'interrupted' || b.status === 'failed')
         .first();
 }
 
@@ -210,7 +211,7 @@ export async function getNextBatchInQueue(user_id: string) {
     return await db.batch_queue
         .where('user_id')
         .equals(user_id)
-        .filter(b => b.status === 'pending' || b.status === 'queued')
+        .filter(b => b.status === 'pending' || b.status === 'queued' || b.status === 'interrupted' || b.status === 'failed')
         .first();
 }
 

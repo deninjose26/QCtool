@@ -165,7 +165,8 @@ const Users: React.FC = () => {
           body: JSON.stringify({
             name: formData.name,
             email: formData.email,
-            user_role: backendRoleMap[formData.role] || formData.role
+            user_role: backendRoleMap[formData.role] || formData.role,
+            ...(formData.password && { password: formData.password }) // Include password if provided
           })
         });
 
@@ -436,7 +437,7 @@ const Users: React.FC = () => {
                     type={showPassword ? "text" : "password"}
                     value={formData.password}
                     onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                    placeholder={editingUser ? "Leave blank to keep same" : "••••••••"}
+                    placeholder={editingUser ? "Enter new password to reset" : "••••••••"}
                     className="pr-10"
                     autoComplete="new-password"
                   />
@@ -454,6 +455,11 @@ const Users: React.FC = () => {
                     )}
                   </Button>
                 </div>
+                {editingUser && (
+                  <p className="text-[11px] text-slate-500 font-medium italic mt-1">
+                    💡 Enter a new password to reset this user's password. Leave blank to keep current password.
+                  </p>
+                )}
               </div>
             </div>
             <PasswordStrength password={formData.password} />

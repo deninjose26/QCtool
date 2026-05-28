@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import PageHeader from '@/components/common/PageHeader';
+import { useAuth } from '@/contexts/AuthContext';
 import DataTable from '@/components/common/DataTable';
 import StatusBadge from '@/components/common/StatusBadge';
 import { API_BASE_URL } from '@/config';
@@ -62,6 +63,7 @@ const SupervisorUploadHistory: React.FC = () => {
     const [filteredBatches, setFilteredBatches] = useState<SupBatch[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const { toast } = useToast();
+    const { apiFetch } = useAuth();
     const token = localStorage.getItem('qc_token');
 
     // Filter States
@@ -215,7 +217,8 @@ const SupervisorUploadHistory: React.FC = () => {
         setDateRange(undefined);
     };
 
-    const columns = [
+    const columns = useMemo(() => {
+        const baseColumns = [
         {
             key: 'batch_id',
             header: 'Batch ID',
@@ -315,7 +318,10 @@ const SupervisorUploadHistory: React.FC = () => {
                 </Button>
             )
         }
-    ];
+        ];
+
+        return baseColumns;
+    }, [navigate, token, toast]);
 
     return (
         <div className="space-y-4 animate-fade-in">

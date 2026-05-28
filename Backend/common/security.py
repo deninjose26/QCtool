@@ -4,13 +4,14 @@ from typing import Optional
 from jose import jwt
 import bcrypt
 from dotenv import load_dotenv
+from common.models import get_ist_now
 
 load_dotenv()
 
 # --- Configuration ---
 SECRET_KEY = os.getenv("SECRET_KEY", "y0ur_sup3r_s3cr3t_v3ry_l0ng_k3y_h3r3_f0r_jwt_t0k3ns")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))
+ACCESS_TOKEN_EXPIRE_MINUTES = min(int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480")), 1440)  # Max 24 hours
 
 # --- Password Hashing ---
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -55,9 +56,9 @@ def validate_password_strength(password: str) -> bool:
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = get_ist_now() + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = get_ist_now() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
@@ -68,16 +69,13 @@ def decode_access_token(token: str) -> Optional[dict]:
         decoded_token = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         # Check expiration (jwt.decode already does this, but we'll be extra clear)
         exp = decoded_token.get("exp")
-        if exp and exp < datetime.utcnow().timestamp():
-            print(f"Token expired: {exp} < {datetime.utcnow().timestamp()}")
+        if exp and exp < get_ist_now().timestamp():
+            print(f"Token expired: {exp} < {get_ist_now().timestamp()}")
             return None
         return decoded_token
     except jwt.ExpiredSignatureError:
-        print("Token signature has expired")
         return None
-    except jwt.JWTError as e:
-        print(f"JWT decode error: {str(e)}")
+    except jwt.JWTError:
         return None
-    except Exception as e:
-        print(f"Unexpected token error: {str(e)}")
+    except Exception:
         return None

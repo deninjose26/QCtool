@@ -114,8 +114,8 @@ const Sidebar: React.FC<SidebarProps> = ({ open, onClose }) => {
 
         {/* User Info */}
         <div className={cn("px-4 py-6 border-b border-sidebar-border overflow-hidden bg-sidebar/50", !open && "px-2 py-4")}>
-          <div className={cn("flex items-center gap-4", !open && "justify-center")}>
-            <Avatar className={cn("border-2 border-white/10 shadow-sm", open ? "h-12 w-12" : "h-10 w-10")}>
+          <NavLink to="/profile" className={cn("flex items-center gap-4 transition-all duration-300 hover:opacity-80 group", !open && "justify-center")}>
+            <Avatar className={cn("border-2 border-white/10 shadow-sm transition-transform duration-300 group-hover:scale-105", open ? "h-12 w-12" : "h-10 w-10")}>
               <AvatarImage src={user?.avatar || defaultAvatar} className="object-cover" />
               <AvatarFallback className="bg-sidebar-accent text-sidebar-accent-foreground font-bold">
                 {user?.name.charAt(0)}
@@ -123,7 +123,7 @@ const Sidebar: React.FC<SidebarProps> = ({ open, onClose }) => {
             </Avatar>
             {open && (
               <div className="flex-1 min-w-0 transition-all duration-300">
-                <p className="text-sm font-bold text-white uppercase tracking-wider truncate">
+                <p className="text-sm font-bold text-white uppercase tracking-wider truncate group-hover:text-blue-400 transition-colors">
                   {user?.name}
                 </p>
                 <p className="text-xs text-sidebar-foreground/60 truncate font-medium">
@@ -131,7 +131,7 @@ const Sidebar: React.FC<SidebarProps> = ({ open, onClose }) => {
                 </p>
               </div>
             )}
-          </div>
+          </NavLink>
         </div>
 
         {/* Navigation */}

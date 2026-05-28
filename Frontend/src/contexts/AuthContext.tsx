@@ -112,19 +112,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.error('Logout API call failed:', error);
       // Continue with logout even if API call fails
     } finally {
-      // 3. Clear auth data but preserve upload queue in IndexedDB
-      // Only clear localStorage (auth token, user data)
-      // IndexedDB upload queue remains intact for auto-resume
+      // 3. Clear auth but PRESERVE upload queue so uploads can resume after re-login
+      const currentUserId = user?.id;
 
       localStorage.removeItem('qc_token');
       localStorage.removeItem('qc_user');
 
-      // 🛑 EMERGENCY STOP: Kill any ghost upload processes
+      // Stop any active uploads (but don't delete the queue records)
       import('@/utils/uploadManager').then(m => m.UploadManager.stopAllInstances());
+
+      // Mark active batches as 'interrupted' so auto-resume picks them up on next login
+      if (currentUserId) {
+        import('@/utils/uploadDB').then(async ({ db }) => {
+          try {
+            const activeBatches = await db.batch_queue
+              .where('user_id').equals(currentUserId)
+              .filter((b: any) => b.status === 'uploading' || b.status === 'in_progress')
+              .toArray();
+            for (const b of activeBatches) {
+              await db.batch_queue.update(b.batch_uid, { status: 'interrupted', updated_at: new Date() });
+            }
+            console.log(`[LOGOUT] Preserved ${activeBatches.length} active batch(es) for resume after re-login`);
+          } catch (e) {
+            console.warn('Failed to update upload queue status on logout:', e);
+          }
+        });
+      }
 
       setUser(null);
 
-      console.log('🔐 Logged out - Upload queue preserved for resume after re-login');
+      console.log('🔐 Logged out - Upload queue preserved for resume');
     }
   }, [apiFetch]);
 

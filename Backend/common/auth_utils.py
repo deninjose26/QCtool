@@ -41,27 +41,22 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail=str(e))
 
 async def get_current_user_role(token: str = Depends(oauth2_scheme)) -> str:
-    print(f"Verifying token (len: {len(token)}): {token[:10]}...{token[-10:]}")
     try:
         payload = decode_access_token(token)
-    except Exception as e:
-        print(f"Token decoding exception: {str(e)}")
+    except Exception:
         payload = None
-        
+
     if not payload:
-        print("Token decoding failed - resulting payload is None")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
     role = payload.get("role")
-    print(f"User role identified: {role}")
     return role
 
 def role_required(allowed_roles: list[UserRole]):
     async def role_checker(role: str = Depends(get_current_user_role)):
-        print(f"Role found: {role}, Allowed: {allowed_roles}")
         if role not in allowed_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

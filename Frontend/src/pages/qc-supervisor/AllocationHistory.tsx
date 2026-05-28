@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import PageHeader from '@/components/common/PageHeader';
 import { useAuth } from '@/contexts/AuthContext';
 import DataTable from '@/components/common/DataTable';
@@ -17,7 +17,9 @@ import {
     CheckCircle,
     Clock,
     UserCheck,
-    X
+    X,
+    Zap,
+    Loader2
 } from 'lucide-react';
 import { formatToLocalTime } from '@/utils/dateUtils';
 import { API_BASE_URL } from '@/config';
@@ -192,7 +194,43 @@ const AllocationHistory: React.FC = () => {
         }
     };
 
-    const columns = [
+    const [isTriggering, setIsTriggering] = useState<string | null>(null);
+
+    const handleTriggerBatch = async (batchUid: string, batchId: string) => {
+        try {
+            setIsTriggering(batchUid);
+            const res = await apiFetch(`${API_BASE_URL}/admin/maintenance/trigger-batch/${batchUid}`, {
+                method: 'POST'
+            });
+
+            if (!res.ok) {
+                const errorData = await res.json().catch(() => ({}));
+                throw new Error(errorData.detail || 'Failed to trigger re-optimization');
+            }
+
+            const data = await res.json();
+            toast({
+                title: 'Optimization Triggered',
+                description: `Successfully queued ${batchId} for re-optimization.`,
+            });
+        } catch (err) {
+            console.error(err);
+            toast({
+                title: 'Trigger Failed',
+                description: err instanceof Error ? err.message : 'An error occurred',
+                variant: 'destructive'
+            });
+        } finally {
+            setIsTriggering(null);
+        }
+    };
+
+    const isRepairToolsEnabled = useMemo(() => {
+        return localStorage.getItem('admin_repair_tools_enabled') === 'true';
+    }, []);
+
+    const columns = useMemo(() => {
+        const baseColumns = [
         {
             key: 'batch_id',
             header: 'Batch ID',
@@ -328,7 +366,33 @@ const AllocationHistory: React.FC = () => {
                 </div>
             )
         }
-    ];
+        ];
+
+        if (isRepairToolsEnabled) {
+            baseColumns.push({
+                key: 'repair_actions',
+                header: 'Repair',
+                render: (_: any, item: QCAllocationTask) => (
+                    <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleTriggerBatch(item.batch_uid, item.batch_id)}
+                        disabled={isTriggering === item.batch_uid}
+                        className="h-8 w-8 p-0 border-indigo-100 hover:bg-indigo-50 hover:text-indigo-600 transition-all"
+                        title="Repair Optimization (Re-convert)"
+                    >
+                        {isTriggering === item.batch_uid ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-500" />
+                        ) : (
+                            <Zap className="h-3.5 w-3.5" />
+                        )}
+                    </Button>
+                )
+            });
+        }
+
+        return baseColumns;
+    }, [isRepairToolsEnabled, isTriggering]);
 
     return (
         <div className="space-y-6 animate-fade-in pb-10">

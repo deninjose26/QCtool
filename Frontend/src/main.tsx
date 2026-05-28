@@ -2,33 +2,34 @@ import { createRoot } from "react-dom/client";
 import App from "./App.tsx";
 import "./index.css";
 import { syncManager } from "./utils/syncManager";
+import { registerSW } from 'virtual:pwa-register';
 
 // Initialize SyncManager to start listening for online events
 syncManager.processQueue();
 
-// Failsafe: Unregister any existing service workers in development to prevent 
-// the "Database connection is closing" error during reloads.
-if (import.meta.env.DEV || window.location.hostname === 'localhost') {
-    if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.getRegistrations().then((registrations) => {
-            for (const registration of registrations) {
-                registration.unregister();
-                console.log('🗑️ Development Failsafe: Service Worker unregistered');
-            }
-        });
-
-        // Clear Workbox caches if they exist
-        if ('caches' in window) {
-            caches.keys().then((names) => {
-                for (const name of names) {
-                    if (name.includes('workbox') || name.includes('api-cache') || name.includes('images-cache')) {
-                        caches.delete(name);
-                        console.log(`🧹 Development Failsafe: Cache ${name} deleted`);
-                    }
-                }
-            });
+// Register PWA Service Worker
+const updateSW = registerSW({
+    onNeedRefresh() {
+        // Show a prompt to the user when a new version is available
+        if (confirm('New version available! Click OK to update.')) {
+            updateSW(true);
         }
+    },
+    onOfflineReady() {
+        console.log('✅ App ready to work offline');
+    },
+    onRegistered(registration) {
+        console.log('✅ Service Worker registered');
+        // Check for updates every hour
+        if (registration) {
+            setInterval(() => {
+                registration.update();
+            }, 60 * 60 * 1000);
+        }
+    },
+    onRegisterError(error) {
+        console.error('❌ Service Worker registration failed:', error);
     }
-}
+});
 
 createRoot(document.getElementById("root")!).render(<App />);

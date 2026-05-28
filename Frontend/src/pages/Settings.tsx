@@ -7,7 +7,7 @@ import { Switch } from '@/components/ui/switch';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useAuth } from '@/contexts/AuthContext';
 import {
-    Sun, Moon, Monitor, Laptop, Info, Mail, Bell, Wrench, RefreshCw,
+    Sun, Moon, Monitor, Laptop, Info, Mail, Bell, RefreshCw,
     Loader2, AlertTriangle, ShieldAlert, Database, FolderOpen,
     ChevronRight, ChevronLeft, HardDrive, Folder, Lock, Shield
 } from 'lucide-react';
@@ -58,14 +58,7 @@ const Settings: React.FC = () => {
     const [parentPath, setParentPath] = useState<string | null>(null);
     const [isBrowsing, setIsBrowsing] = useState(false);
 
-    const handleToggleRepairTools = (enabled: boolean) => {
-        setRepairToolsEnabled(enabled);
-        localStorage.setItem('admin_repair_tools_enabled', String(enabled));
-        toast({
-            title: 'Repair Tools Updated',
-            description: `Batch repair actions are now ${enabled ? 'visible' : 'hidden'} in Upload History`,
-        });
-    };
+
 
     const themes = [
         { id: 'light', name: 'Light Mode', icon: Sun, desc: 'Clean and bright appearance', color: 'bg-white' },
@@ -400,7 +393,7 @@ const Settings: React.FC = () => {
                 </Card>
 
                 {/* Partial Upload Feature - Admin Only */}
-                {(user?.role === 'SuperAdmin' || user?.role === 'Upload_Supervisor') && (
+                {user?.role === 'SuperAdmin' && (
                     <Card className="border-none shadow-md shadow-slate-200/50 ring-1 ring-slate-200/60 overflow-hidden bg-white">
                         <CardHeader className="pb-4">
                             <div className="flex items-center gap-3">
@@ -766,25 +759,6 @@ const Settings: React.FC = () => {
                     </Card>
                 )}
 
-                {/* Troubleshooting */}
-                {user?.role === 'SuperAdmin' && (
-                    <Card className="border-none shadow-md shadow-slate-200/50 ring-1 ring-slate-200/60 overflow-hidden bg-white">
-                        <CardHeader className="pb-4">
-                            <div className="flex items-center gap-3">
-                                <div className="h-10 w-10 rounded-xl bg-amber-50 flex items-center justify-center">
-                                    <Wrench className="h-5 w-5 text-amber-600" />
-                                </div>
-                                <CardTitle className="text-sm font-black uppercase tracking-widest text-slate-800">Troubleshooting</CardTitle>
-                            </div>
-                        </CardHeader>
-                        <CardContent className="p-6">
-                            <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl">
-                                <Label className="text-sm font-bold">Enable Repair Tools</Label>
-                                <Switch checked={repairToolsEnabled} onCheckedChange={handleToggleRepairTools} />
-                            </div>
-                        </CardContent>
-                    </Card>
-                )}
             </div>
         </div>
     );

@@ -74,9 +74,9 @@ const TopBar: React.FC<TopBarProps> = ({ onMenuClick }) => {
                 </Badge>
             </div>
 
-            <div className="flex items-center gap-2 sm:gap-6">
+            <div className="flex items-center gap-1.5 sm:gap-4">
                 {/* System Health & Time Cluster */}
-                <div className="flex items-center bg-muted/30 px-2 sm:px-3 lg:px-4 py-1.5 rounded-full border border-border/50 gap-2 sm:gap-3 lg:gap-6">
+                <div className="hidden min-[450px]:flex items-center bg-muted/30 px-1.5 sm:px-3 lg:px-4 py-1.5 rounded-full border border-border/50 gap-1.5 sm:gap-3 lg:gap-6">
                     {/* Status */}
                     <div className="flex items-center gap-1.5 sm:gap-2 lg:gap-3">
                         <div className="relative flex h-2 w-2 sm:h-2.5 sm:w-2.5">
@@ -104,20 +104,20 @@ const TopBar: React.FC<TopBarProps> = ({ onMenuClick }) => {
 
                     {/* Date & Time */}
                     <div className="flex items-center gap-2 sm:gap-4">
-                        <div className="flex items-center gap-2 text-primary">
+                        <div className="hidden md:flex items-center gap-2 text-primary">
                             <Calendar className="h-3.5 w-3.5 opacity-70" />
                             <span className="text-[10px] sm:text-xs font-bold whitespace-nowrap">
                                 {new Date().toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
                             </span>
                         </div>
-                        <div className="flex items-center gap-1.5 sm:gap-2 text-primary border-l border-border/60 pl-2 lg:pl-4">
+                        <div className="flex items-center gap-1.5 sm:gap-2 text-primary md:border-l border-border/60 md:pl-2 lg:pl-4">
                             <Clock className="h-3 sm:h-3.5 w-3 sm:w-3.5 opacity-70" />
                             <LiveClock />
                         </div>
                     </div>
                 </div>
 
-                <div className="flex items-center gap-2 sm:gap-3 border-l pl-2 sm:pl-6 border-border/50">
+                <div className="flex flex-shrink-0 items-center gap-1.5 sm:gap-3 border-l pl-1.5 sm:pl-4 border-border/50">
                     <PWAInstallButton />
                     <SyncQueueBadge />
                     <NotificationBell />
@@ -125,7 +125,7 @@ const TopBar: React.FC<TopBarProps> = ({ onMenuClick }) => {
                     {/* User Menu */}
                     <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" className="flex items-center gap-2 px-1 sm:px-2 h-8 sm:h-10">
+                            <Button variant="ghost" className="flex-shrink-0 flex items-center gap-2 px-1 sm:px-2 h-8 sm:h-10">
                                 <Avatar className="h-6 w-6 sm:h-8 sm:w-8">
                                     <AvatarImage src={user?.avatar || defaultAvatar} />
                                     <AvatarFallback className="bg-primary text-primary-foreground text-[10px] sm:text-sm">

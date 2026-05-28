@@ -886,14 +886,39 @@ async def conversion_complete(
             detail=f"Image not found: {data.image_id}"
         )
     
+    # Verify converted file actually exists in QC bucket before updating DB
+    try:
+        qc_s3_client = boto3.client(
+            's3',
+            endpoint_url=os.getenv('QC_ENDPOINT_URL', os.getenv('ENDPOINT_URL')),
+            aws_access_key_id=os.getenv('QC_AWS_ACCESS_KEY_ID'),
+            aws_secret_access_key=os.getenv('QC_AWS_SECRET_ACCESS_KEY'),
+            region_name=os.getenv('AWS_REGION', 'blr1'),
+            config=Config(signature_version='s3v4')
+        )
+        qc_meta = qc_s3_client.head_object(
+            Bucket=os.getenv('QC_S3_BUCKET_NAME'),
+            Key=data.qc_path
+        )
+        if qc_meta['ContentLength'] == 0:
+            raise HTTPException(status_code=400, detail="Converted file is empty (0 bytes)")
+    except ClientError as e:
+        error_code = e.response.get('Error', {}).get('Code', '')
+        if error_code in ['404', 'NoSuchKey']:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Converted file not found at {data.qc_path} in QC bucket"
+            )
+        print(f"⚠️ QC bucket verification warning: {e}")
+
     # Update conversion status
     image.qc_s3_path = data.qc_path
     image.converted_file_type = FileType.JPEG
     image.conversion_status = ConversionStatus.Jpeg_Converted
-    
+
     session.commit()
     session.refresh(image)
-    
+
     return {
         "success": True,
         "image_id": str(image.image_id),
@@ -930,21 +955,22 @@ def get_batch_progress(
     if not allocation or allocation.allocated_to_operator != current_user.user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this batch")
     
-    # Count uploaded images
-    uploaded_images = session.exec(
-        select(Image).where(Image.batch_uid == batch_uid)
-    ).all()
+    # Count uploaded images (Optimized)
+    uploaded_count = session.exec(
+        select(func.count(Image.image_id)).where(Image.batch_uid == batch_uid)
+    ).first() or 0
     
-    uploaded_count = len(uploaded_images)
-    
-    # Count converted images
-    converted_count = sum(
-        1 for img in uploaded_images 
-        if img.conversion_status == ConversionStatus.Jpeg_Converted
-    )
+    # Count converted images (Optimized)
+    converted_count = session.exec(
+        select(func.count(Image.image_id))
+        .where(Image.batch_uid == batch_uid)
+        .where(Image.conversion_status == ConversionStatus.Jpeg_Converted)
+    ).first() or 0
     
     # Get list of uploaded file names
-    uploaded_files = [img.image_name for img in uploaded_images]
+    uploaded_files = session.exec(
+        select(Image.image_name).where(Image.batch_uid == batch_uid)
+    ).all()
     
     return BatchProgressResponse(
         batch_uid=batch_uid,
@@ -1218,6 +1244,17 @@ class PresignedUrlRequest(BaseModel):
     file_size: int
     content_type: str = "image/tiff"
 
+class MultipartInitRequest(BaseModel):
+    file_name: str
+    file_size: int
+    content_type: str = "image/tiff"
+    num_parts: int
+
+class MultipartCompleteRequest(BaseModel):
+    upload_id: str
+    s3_path: str
+    parts: List[dict]  # [{ PartNumber, ETag }]
+
 class PresignedUrlResponse(BaseModel):
     upload_url: str
     s3_path: str
@@ -1238,6 +1275,14 @@ class UploadCompleteRequest(BaseModel):
     file_name: str
     s3_path: str
     file_size: int
+    content_md5: Optional[str] = None  # MD5 hex digest for ETag verification
+
+class BatchPresignedUrlRequest(BaseModel):
+    files: List[dict]  # [{ file_name, file_size, content_type }] max 50
+
+class BatchUploadCompleteRequest(BaseModel):
+    batch_uid: UUID
+    files: List[dict]  # [{ file_name, s3_path, file_size, content_md5 }] max 20
 
 @router.get("/batches/{batch_uid}/hierarchy", response_model=BatchHierarchyResponse)
 def get_batch_hierarchy(
@@ -1415,6 +1460,224 @@ async def request_upload_url(
         
     except ClientError as e:
         raise HTTPException(status_code=500, detail=f"S3 Error: {str(e)}")
+
+@router.post("/batches/{batch_uid}/request-upload-urls")
+async def request_upload_urls(
+    batch_uid: UUID,
+    request: BatchPresignedUrlRequest,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Generate presigned URLs for multiple files at once (up to 50).
+    Eliminates N round-trips for hierarchy lookup during bulk uploads.
+    """
+    if len(request.files) > 50:
+        raise HTTPException(status_code=400, detail="Maximum 50 files per batch URL request")
+
+    if len(request.files) == 0:
+        raise HTTPException(status_code=400, detail="No files specified")
+
+    # Get hierarchy once for all files
+    try:
+        hierarchy = get_cached_hierarchy(batch_uid, current_user.user_id)
+    except Exception as e:
+        hierarchy = get_batch_hierarchy(batch_uid, session, current_user)
+
+    def s(val): return str(val or "MISSING").strip() or "MISSING"
+
+    s3_client = boto3.client(
+        's3',
+        endpoint_url=os.getenv('ENDPOINT_URL'),
+        aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+        aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+        region_name=os.getenv('AWS_REGION', 'blr1'),
+        config=Config(signature_version='s3v4')
+    )
+
+    bucket = os.getenv('S3_BUCKET_NAME')
+    urls = []
+
+    for file_info in request.files:
+        file_name = file_info.get('file_name', '')
+        file_lower = file_name.lower()
+
+        if not (file_lower.endswith('.tif') or file_lower.endswith('.tiff')):
+            continue  # Skip non-TIFF files silently
+
+        s3_path = "/".join([
+            s(hierarchy.base_folder), s(hierarchy.project_name), s(hierarchy.source_name),
+            s(hierarchy.location_name), s(hierarchy.record_owner_name), s(hierarchy.record_type_name),
+            s(hierarchy.book_name), s(hierarchy.upload_code), file_name
+        ])
+
+        try:
+            presigned_url = s3_client.generate_presigned_url(
+                'put_object',
+                Params={'Bucket': bucket, 'Key': s3_path, 'ContentType': 'image/tiff'},
+                ExpiresIn=3600
+            )
+            urls.append({
+                "file_name": file_name,
+                "upload_url": presigned_url,
+                "s3_path": s3_path,
+                "expires_in": 3600
+            })
+        except ClientError as e:
+            print(f"⚠️ Failed to generate URL for {file_name}: {e}")
+
+    return {"urls": urls}
+
+@router.post("/batches/{batch_uid}/upload-complete-batch")
+async def upload_complete_batch(
+    batch_uid: UUID,
+    request: BatchUploadCompleteRequest,
+    fastapi_request: Request,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Process multiple upload completions in a single request (up to 20).
+    Reduces N round-trips to N/20 for completion signals.
+    """
+    if len(request.files) > 20:
+        raise HTTPException(status_code=400, detail="Maximum 20 files per batch completion request")
+
+    results = []
+    for file_info in request.files:
+        try:
+            individual_request = UploadCompleteRequest(
+                batch_uid=batch_uid,
+                file_name=file_info['file_name'],
+                s3_path=file_info['s3_path'],
+                file_size=file_info['file_size'],
+                content_md5=file_info.get('content_md5')
+            )
+            # Delegate to existing upload_complete handler
+            result = await upload_complete(
+                batch_uid=batch_uid,
+                request=individual_request,
+                fastapi_request=fastapi_request,
+                background_tasks=background_tasks,
+                session=session,
+                current_user=current_user
+            )
+            results.append({"file_name": file_info['file_name'], "success": True, "result": result})
+        except HTTPException as e:
+            results.append({"file_name": file_info['file_name'], "success": False, "error": e.detail})
+        except Exception as e:
+            results.append({"file_name": file_info['file_name'], "success": False, "error": str(e)})
+
+    return {"results": results, "processed": len(results)}
+
+# --- S3 Multipart Upload Endpoints (for large files >10MB, resumable) ---
+
+@router.post("/batches/{batch_uid}/initiate-multipart")
+async def initiate_multipart_upload(
+    batch_uid: UUID,
+    request: MultipartInitRequest,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Initiate an S3 multipart upload for large files. Returns upload_id and presigned URLs for each part."""
+    file_lower = request.file_name.lower()
+    if not (file_lower.endswith('.tif') or file_lower.endswith('.tiff')):
+        raise HTTPException(status_code=400, detail="Only TIFF files allowed.")
+
+    try:
+        hierarchy = get_cached_hierarchy(batch_uid, current_user.user_id)
+    except Exception:
+        hierarchy = get_batch_hierarchy(batch_uid, session, current_user)
+
+    def s(val): return str(val or "MISSING").strip() or "MISSING"
+
+    s3_path = "/".join([
+        s(hierarchy.base_folder), s(hierarchy.project_name), s(hierarchy.source_name),
+        s(hierarchy.location_name), s(hierarchy.record_owner_name), s(hierarchy.record_type_name),
+        s(hierarchy.book_name), s(hierarchy.upload_code), request.file_name
+    ])
+
+    s3_client = boto3.client(
+        's3',
+        endpoint_url=os.getenv('ENDPOINT_URL'),
+        aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+        aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+        region_name=os.getenv('AWS_REGION', 'blr1'),
+        config=Config(signature_version='s3v4')
+    )
+
+    bucket = os.getenv('S3_BUCKET_NAME')
+
+    # Initiate multipart upload
+    mpu = s3_client.create_multipart_upload(
+        Bucket=bucket,
+        Key=s3_path,
+        ContentType=request.content_type
+    )
+    upload_id = mpu['UploadId']
+
+    # Generate presigned URLs for each part
+    part_urls = []
+    for part_num in range(1, request.num_parts + 1):
+        url = s3_client.generate_presigned_url(
+            'upload_part',
+            Params={
+                'Bucket': bucket,
+                'Key': s3_path,
+                'UploadId': upload_id,
+                'PartNumber': part_num
+            },
+            ExpiresIn=3600
+        )
+        part_urls.append(url)
+
+    return {
+        "upload_id": upload_id,
+        "s3_path": s3_path,
+        "part_urls": part_urls
+    }
+
+@router.post("/batches/{batch_uid}/complete-multipart")
+async def complete_multipart_upload(
+    batch_uid: UUID,
+    request: MultipartCompleteRequest,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Complete an S3 multipart upload after all parts have been uploaded."""
+    s3_client = boto3.client(
+        's3',
+        endpoint_url=os.getenv('ENDPOINT_URL'),
+        aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+        aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+        region_name=os.getenv('AWS_REGION', 'blr1'),
+        config=Config(signature_version='s3v4')
+    )
+
+    bucket = os.getenv('S3_BUCKET_NAME')
+
+    try:
+        parts = [{'PartNumber': p['PartNumber'], 'ETag': f"\"{p['ETag']}\"" if not p['ETag'].startswith('"') else p['ETag']} for p in request.parts]
+
+        s3_client.complete_multipart_upload(
+            Bucket=bucket,
+            Key=request.s3_path,
+            UploadId=request.upload_id,
+            MultipartUpload={'Parts': parts}
+        )
+        return {"success": True, "s3_path": request.s3_path}
+    except ClientError as e:
+        # Abort the multipart upload on failure
+        try:
+            s3_client.abort_multipart_upload(
+                Bucket=bucket,
+                Key=request.s3_path,
+                UploadId=request.upload_id
+            )
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=f"Multipart upload completion failed: {str(e)}")
 
 @router.post("/batches/{batch_uid}/sync-conversion")
 def sync_batch_conversion(
@@ -1684,21 +1947,35 @@ async def upload_complete(
 
     client_ip = fastapi_request.client.host if fastapi_request.client else "unknown"
     
-    # Wait up to 20 seconds for S3 to index the file with high-resolution polling
-    for attempt in range(100):
+    # Wait up to ~30 seconds for S3 to index the file with exponential backoff
+    s3_etag = None
+    delay = 0.1
+    for attempt in range(20):
         try:
-            # Immediate check without sleep on first attempt
             if attempt > 0:
-                await asyncio.sleep(0.2)
-                
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 2.0)  # Exponential backoff, cap at 2s
+
             s3_meta = s3_client.head_object(Bucket=os.getenv('S3_BUCKET_NAME'), Key=request.s3_path)
             actual_size = s3_meta['ContentLength']
-            
+            s3_etag = s3_meta.get('ETag', '').strip('"')
+
             if actual_size == request.file_size:
                 s3_verified = True
                 break
         except ClientError:
             pass
+
+    # ETag (MD5) verification if frontend supplied a checksum
+    if s3_verified and request.content_md5 and s3_etag:
+        if s3_etag != request.content_md5:
+            print(f"[CORRUPT] ETag mismatch for {request.file_name}: S3={s3_etag} vs client={request.content_md5} at {client_ip}")
+            try: s3_client.delete_object(Bucket=os.getenv('S3_BUCKET_NAME'), Key=request.s3_path)
+            except: pass
+            raise HTTPException(
+                status_code=400,
+                detail=f"Upload Failed: Checksum mismatch - file corrupted during upload. Please RE-UPLOAD."
+            )
 
     if not s3_verified:
         # If actual_size is -1, it means head_object threw a 404 (S3 hasn't indexed it yet)
@@ -2036,8 +2313,18 @@ def get_operator_qc_history(
     from sqlalchemy import func
     
     # Filter by batches where Upload.uploaded_by is current_user and status is verified
+    from sqlalchemy import case, func
+    qc_stats = select(
+        QC.qc_allocation_id,
+        func.sum(case((QC.qc_status != QCStatus.Pending, 1), else_=0)).label("done_count"),
+        func.sum(case((QC.qc_status == QCStatus.Approved, 1), else_=0)).label("accepted_count"),
+        func.sum(case((QC.qc_status == QCStatus.Rejected, 1), else_=0)).label("rejected_count")
+    ).group_by(QC.qc_allocation_id).subquery()
+
+    # Filter by batches where Upload.uploaded_by is current_user and status is verified
     statement = select(
-        Batch, Source, Location, RecordOwner, RecordType, RecordName, Project, QCAllocation
+        Batch, Source, Location, RecordOwner, RecordType, RecordName, Project, QCAllocation,
+        qc_stats.c.done_count, qc_stats.c.accepted_count, qc_stats.c.rejected_count
     ).join(Source, Batch.source_id == Source.source_id)\
      .join(Location, Batch.location_id == Location.location_id)\
      .join(RecordOwner, Batch.record_owner_id == RecordOwner.record_owner_id)\
@@ -2046,17 +2333,18 @@ def get_operator_qc_history(
      .join(Project, Source.project_id == Project.project_id)\
      .join(Upload, Batch.batch_uid == Upload.batch_uid)\
      .join(QCAllocation, Batch.batch_uid == QCAllocation.batch_uid)\
+     .outerjoin(qc_stats, QCAllocation.qc_allocation_id == qc_stats.c.qc_allocation_id)\
      .where(Upload.uploaded_by == current_user.user_id)\
      .where(QCAllocation.qc_batch_status.in_([QCBatchStatus.Verified, QCBatchStatus.Verified_With_Rejection]))\
      .order_by(Batch.created_date.desc())
     
     results = session.exec(statement).all()
     
-    output = []
-    for b, s, l, ro, rt, rn, p, qca in results:
-        qc_done = 0
-        accepted = 0
-        rejected = 0
+    history = []
+    for b, s, l, ro, rt, rn, p, qca, qc_done, accepted, rejected in results:
+        qc_done = qc_done or 0
+        accepted = accepted or 0
+        rejected = rejected or 0
         qc_status = "Pending Allocation"
         allocation_date = None
         qc_completed_date = None
@@ -2065,32 +2353,13 @@ def get_operator_qc_history(
             qc_status = qca.qc_batch_status
             allocation_date = qca.allocation_date
             qc_completed_date = qca.qc_completed_date
-            
-            # Count QC stats
-            qc_done = session.exec(
-                select(func.count(QC.qc_id))
-                .where(QC.qc_allocation_id == qca.qc_allocation_id)
-                .where(QC.qc_status != QCStatus.Pending)
-            ).first() or 0
-
-            accepted = session.exec(
-                select(func.count(QC.qc_id))
-                .where(QC.qc_allocation_id == qca.qc_allocation_id)
-                .where(QC.qc_status == QCStatus.Approved)
-            ).first() or 0
-
-            rejected = session.exec(
-                select(func.count(QC.qc_id))
-                .where(QC.qc_allocation_id == qca.qc_allocation_id)
-                .where(QC.qc_status == QCStatus.Rejected)
-            ).first() or 0
 
         # Determine upload type
         upload_type = "Complete"
         if b.is_reupload: upload_type = "Re-upload"
         elif b.is_partial: upload_type = "Partial"
 
-        output.append(BatchQCHistoryRead(
+        history.append(BatchQCHistoryRead(
             batch_uid=b.batch_uid,
             batch_id=b.batch_id,
             project_name=p.project_name,
@@ -2110,7 +2379,7 @@ def get_operator_qc_history(
             qc_completed_date=qc_completed_date
         ))
     
-    return output
+    return history
 @router.get("/qc-report/{batch_uid}")
 def get_operator_batch_qc_report(
     batch_uid: UUID,
@@ -2182,23 +2451,22 @@ def get_operator_dashboard_stats(
     # Rework Assignments
     rework_batches = len([b for b, u in batches_results if b.is_reupload and not (u and u.upload_status == 'Completed')])
 
-    # 2. Quality Stats
-    all_qca_stmt = (
-        select(QCAllocation)
+    # 2. Quality Stats (Optimized with a single aggregate query)
+    quality_stats_stmt = (
+        select(
+            func.sum(case((QC.qc_status == QCStatus.Approved, 1), else_=0)).label("accepted"),
+            func.sum(case((QC.qc_status == QCStatus.Rejected, 1), else_=0)).label("rejected")
+        )
+        .join(QCAllocation, QC.qc_allocation_id == QCAllocation.qc_allocation_id)
         .join(Batch, QCAllocation.batch_uid == Batch.batch_uid)
         .join(ScanningOperatorAllocation, Batch.scanning_operator_allocation_id == ScanningOperatorAllocation.scanning_operator_allocation_id)
         .where(ScanningOperatorAllocation.allocated_to_operator == current_user.user_id)
         .where(QCAllocation.qc_batch_status.in_([QCBatchStatus.Verified, QCBatchStatus.Verified_With_Rejection]))
     )
-    all_qca = session.exec(all_qca_stmt).all()
+    quality_results = session.exec(quality_stats_stmt).first()
     
-    total_accepted = 0
-    total_rejected = 0
-    for qca in all_qca:
-        accepted = session.exec(select(func.count(QC.qc_id)).where(QC.qc_allocation_id == qca.qc_allocation_id).where(QC.qc_status == QCStatus.Approved)).one()
-        rejected = session.exec(select(func.count(QC.qc_id)).where(QC.qc_allocation_id == qca.qc_allocation_id).where(QC.qc_status == QCStatus.Rejected)).one()
-        total_accepted += accepted
-        total_rejected += rejected
+    total_accepted = (quality_results[0] if quality_results else 0) or 0
+    total_rejected = (quality_results[1] if quality_results else 0) or 0
 
     # 3. Recent Activity 
     recent_uploads = []

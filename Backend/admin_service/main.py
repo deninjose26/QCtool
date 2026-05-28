@@ -1378,17 +1378,52 @@ def update_user(
         db_user.is_active = user_data.is_active
     if user_data.password:
         from common.security import get_password_hash, validate_password_strength
+        from common.email_utils import send_password_reset_email
+        
         if not validate_password_strength(user_data.password):
             raise HTTPException(
                 status_code=400,
                 detail="Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, one digit, and one special character."
             )
-        db_user.password_hash = get_password_hash(user_data.password)
+        new_hash = get_password_hash(user_data.password)
+        print(f"🔐 Admin password change for user {db_user.username}")
+        print(f"   New hash length: {len(new_hash)}")
+        print(f"   New hash (first 20 chars): {new_hash[:20]}...")
+        db_user.password_hash = new_hash
+        db_user.last_updated = datetime.utcnow()
         changes["password"] = "Updated"
+        
+        # Send email notification to user with new password
+        if db_user.email and db_user.email_notifications_enabled:
+            try:
+                send_password_reset_email(
+                    to_email=db_user.email,
+                    name=db_user.name,
+                    username=db_user.username,
+                    new_password=user_data.password,
+                    changed_by=current_user.name
+                )
+                print(f"   📧 Password reset email sent to {db_user.email}")
+            except Exception as e:
+                print(f"   ⚠️ Failed to send password reset email: {str(e)}")
+                # Don't fail the password change if email fails
         
     session.add(db_user)
     session.commit()
     session.refresh(db_user)
+    
+    # Verify the password was saved correctly
+    if user_data.password:
+        from common.security import verify_password
+        verification_test = verify_password(user_data.password, db_user.password_hash)
+        print(f"   Password verification test after save: {verification_test}")
+        if not verification_test:
+            print(f"   ⚠️ WARNING: Password verification failed immediately after save!")
+            print(f"   Stored hash (first 20): {db_user.password_hash[:20]}...")
+            raise HTTPException(
+                status_code=500,
+                detail="Password was saved but verification failed. Please try again or contact support."
+            )
 
     # Log the action
     if changes:
@@ -1465,6 +1500,106 @@ def delete_user(
         raise HTTPException(status_code=500, detail=str(e))
     return {"ok": True}
 
+# --- Admin Password Reset ---
+
+class AdminPasswordReset(BaseModel):
+    new_password: str
+
+@router.post("/users/{user_id}/reset-password")
+def admin_reset_password(
+    user_id: UUID,
+    password_data: AdminPasswordReset,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Admin endpoint to reset a user's password"""
+    from common.audit_logger import log_action
+    from common.security import get_password_hash, validate_password_strength, verify_password
+    from common.email_utils import send_password_reset_email
+    
+    # Permission check: Admin or creator can reset password
+    db_user = session.get(User, user_id)
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    is_admin = current_user.user_role == UserRole.SuperAdmin
+    is_creator = db_user.created_by == current_user.user_id
+    
+    if not (is_admin or is_creator):
+        raise HTTPException(
+            status_code=403,
+            detail="You are not authorized to reset this user's password."
+        )
+    
+    # Validate password strength
+    if not validate_password_strength(password_data.new_password):
+        raise HTTPException(
+            status_code=400,
+            detail="Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, one digit, and one special character."
+        )
+    
+    # Hash and save password
+    new_hash = get_password_hash(password_data.new_password)
+    print(f"🔐 Admin password reset for user {db_user.username} by {current_user.username}")
+    print(f"   New hash length: {len(new_hash)}")
+    print(f"   New hash (first 20 chars): {new_hash[:20]}...")
+    
+    db_user.password_hash = new_hash
+    db_user.last_updated = datetime.utcnow()
+    
+    session.add(db_user)
+    session.commit()
+    session.refresh(db_user)
+    
+    # Verify the password was saved correctly
+    verification_test = verify_password(password_data.new_password, db_user.password_hash)
+    print(f"   Password verification test after save: {verification_test}")
+    
+    if not verification_test:
+        print(f"   ⚠️ WARNING: Password verification failed immediately after save!")
+        print(f"   Stored hash (first 20): {db_user.password_hash[:20]}...")
+        raise HTTPException(
+            status_code=500,
+            detail="Password was saved but verification failed. Please try again or contact support."
+        )
+    
+    # Send email notification to user
+    if db_user.email and db_user.email_notifications_enabled:
+        try:
+            send_password_reset_email(
+                to_email=db_user.email,
+                name=db_user.name,
+                username=db_user.username,
+                new_password=password_data.new_password,
+                changed_by=current_user.name
+            )
+            print(f"   📧 Password reset email sent to {db_user.email}")
+        except Exception as e:
+            print(f"   ⚠️ Failed to send password reset email: {str(e)}")
+    
+    # Log the action
+    log_action(
+        session=session,
+        user_id=current_user.user_id,
+        username=current_user.username,
+        action="Password Reset by Admin",
+        endpoint=f"/admin/users/{user_id}/reset-password",
+        method="POST",
+        payload={
+            "target_user_id": str(user_id),
+            "target_username": db_user.username,
+            "reset_by": current_user.username
+        },
+        result="success"
+    )
+    
+    return {
+        "message": "Password reset successfully",
+        "username": db_user.username,
+        "email_sent": db_user.email and db_user.email_notifications_enabled
+    }
+
+
 # --- Global Upload History ---
 
 @router.get("/batches", response_model=List[BatchRead])
@@ -1478,8 +1613,17 @@ def list_admin_batches(
     OperatorUser = aliased(User)
     VendorUser = aliased(User)
     
+    # Use a subquery to get actual unique image counts from the Image table
+    # Using DISTINCT on image_name to handle cases where duplicate records might exist
+    from sqlalchemy import distinct, func
+    image_counts = select(
+        Image.batch_uid,
+        func.count(distinct(Image.image_name)).label("actual_count")
+    ).group_by(Image.batch_uid).subquery()
+
     statement = select(
-        Batch, Source, Location, RecordOwner, RecordType, RecordName, Project, Upload, OperatorUser, VendorUser
+        Batch, Source, Location, RecordOwner, RecordType, RecordName, Project, Upload, OperatorUser, VendorUser,
+        image_counts.c.actual_count
     ).join(Source, Batch.source_id == Source.source_id)\
      .join(Location, Batch.location_id == Location.location_id)\
      .join(RecordOwner, Batch.record_owner_id == RecordOwner.record_owner_id)\
@@ -1491,12 +1635,13 @@ def list_admin_batches(
      .join(VendorAllocation, ScanningOperatorAllocation.vendor_allocation_id == VendorAllocation.vendor_allocation_id)\
      .join(OperatorUser, ScanningOperatorAllocation.allocated_to_operator == OperatorUser.user_id)\
      .join(VendorUser, VendorAllocation.allocated_to_vendor == VendorUser.user_id)\
+     .outerjoin(image_counts, Batch.batch_uid == image_counts.c.batch_uid)\
      .order_by(Batch.created_date.desc())
     
     results = session.exec(statement).all()
     
     output = []
-    for b, s, l, ro, rt, rn, p, u, opt, vnd in results:
+    for b, s, l, ro, rt, rn, p, u, opt, vnd, actual_count in results:
         status = 'pending'
         status_detail = ""
         replaced_by = None
@@ -1524,7 +1669,7 @@ def list_admin_batches(
             record_type_name=rt.record_type_name,
             book_name=rn.record_name,
             target_count=b.upload_count,
-            completed_count=u.completed_count if u else 0,
+            completed_count=actual_count or 0,
             vendor_name=vnd.name,
             operator_name=opt.name,
             upload_type=upload_type,
@@ -1724,28 +1869,7 @@ def list_directories(
         }
     except:
         return {"current_path": "", "directories": get_roots(), "parent": None}
-        output.append(BatchRead(
-            batch_uid=b.batch_uid,
-            batch_id=b.batch_id,
-            project_name=p.project_name,
-            source_name=s.source_name,
-            location_name=l.location_name,
-            record_owner_name=ro.record_owner_name,
-            record_type_name=rt.record_type_name,
-            book_name=rn.record_name,
-            target_count=b.total_count,
-            completed_count=u.completed_count if u else 0,
-            vendor_name=vnd.name,
-            operator_name=opt.name,
-            upload_type=upload_type,
-            status=status,
-            parent_batch_uid=b.parent_batch_uid,
-            replaced_by_batch_uid=replaced_by,
-            status_detail=status_detail,
-            upload_end_date=u.upload_end_date if u else None
-        ))
-    
-    return output
+
 
 @router.get("/qc-history", response_model=List[QCHistoryRead])
 def get_admin_qc_history(
@@ -1760,19 +1884,21 @@ def get_admin_qc_history(
     QCUser = aliased(User)
     VendorUser = aliased(User)
 
+    from sqlalchemy import case, func
+    qc_stats = select(
+        QC.qc_allocation_id,
+        func.sum(case((QC.qc_status != QCStatus.Pending, 1), else_=0)).label("done_count"),
+        func.sum(case((QC.qc_status == QCStatus.Approved, 1), else_=0)).label("accepted_count"),
+        func.sum(case((QC.qc_status == QCStatus.Rejected, 1), else_=0)).label("rejected_count")
+    ).group_by(QC.qc_allocation_id).subquery()
+
     statement = (
         select(
-            QCAllocation,
-            Batch,
-            Project.project_name,
-            Source.source_name,
-            Location.location_name,
-            RecordOwner.record_owner_name,
-            RecordType.record_type_name,
-            RecordName.record_name,
-            VendorUser.name.label("vendor_name"),
-            QCUser.name.label("qc_user_name"),
-            SupervisorUser.name.label("supervisor_name")
+            QCAllocation, Batch, Project.project_name, Source.source_name, 
+            Location.location_name, RecordOwner.record_owner_name, 
+            RecordType.record_type_name, RecordName.record_name, 
+            VendorUser.name, QCUser.name, SupervisorUser.name,
+            qc_stats.c.done_count, qc_stats.c.accepted_count, qc_stats.c.rejected_count
         )
         .join(Batch, QCAllocation.batch_uid == Batch.batch_uid)
         .join(Source, Batch.source_id == Source.source_id)
@@ -1786,8 +1912,8 @@ def get_admin_qc_history(
         .join(VendorUser, VendorAllocation.allocated_to_vendor == VendorUser.user_id)
         .join(QCUser, QCAllocation.allocated_to_qc_user == QCUser.user_id)
         .join(SupervisorUser, QCAllocation.allocated_by_supervisor == SupervisorUser.user_id)
+        .outerjoin(qc_stats, QCAllocation.qc_allocation_id == qc_stats.c.qc_allocation_id)
         .where(QCAllocation.qc_batch_status.in_([
-            QCBatchStatus.Completed, 
             QCBatchStatus.Verified, 
             QCBatchStatus.Verified_With_Rejection
         ]))
@@ -1797,24 +1923,10 @@ def get_admin_qc_history(
     results = session.exec(statement).all()
     
     history = []
-    for qca, batch, proj, src, loc, owner, rtype, rname, vname, qc_user_name, sup_name in results:
-        qc_done = session.exec(
-            select(func.count(QC.qc_id))
-            .where(col(QC.qc_allocation_id) == qca.qc_allocation_id)
-            .where(QC.qc_status != QCStatus.Pending)
-        ).first() or 0
-
-        accepted = session.exec(
-            select(func.count(QC.qc_id))
-            .where(col(QC.qc_allocation_id) == qca.qc_allocation_id)
-            .where(QC.qc_status == QCStatus.Approved)
-        ).first() or 0
-
-        rejected = session.exec(
-            select(func.count(QC.qc_id))
-            .where(col(QC.qc_allocation_id) == qca.qc_allocation_id)
-            .where(QC.qc_status == QCStatus.Rejected)
-        ).first() or 0
+    for qca, batch, proj, src, loc, owner, rtype, rname, vname, qc_user_name, sup_name, qc_done, accepted, rejected in results:
+        qc_done = qc_done or 0
+        accepted = accepted or 0
+        rejected = rejected or 0
 
         up_type = "Complete"
         if batch.is_reupload:
@@ -2272,8 +2384,9 @@ async def trigger_batch_conversion(
     current_user: User = Depends(get_current_user)
 ):
     """Trigger conversion ONLY for missing/stuck images in a specific batch"""
-    if current_user.user_role != UserRole.SuperAdmin:
-        raise HTTPException(status_code=403, detail="SuperAdmin access only.")
+    # Robust role check
+    if current_user.user_role not in [UserRole.SuperAdmin, UserRole.QC_Supervisor]:
+        raise HTTPException(status_code=403, detail=f"Access denied for role: {current_user.user_role}")
 
     from common.models import ConversionStatus
     

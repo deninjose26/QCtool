@@ -568,8 +568,18 @@ def list_sup_batches(
     OperatorUser = aliased(User)
     VendorUser = aliased(User)
     
+    # Use a subquery to get actual unique image counts from the Image table
+    # Using DISTINCT on image_name to handle cases where duplicate records might exist
+    from sqlalchemy import distinct
+    from common.models import Image
+    image_counts = select(
+        Image.batch_uid,
+        func.count(distinct(Image.image_name)).label("actual_count")
+    ).group_by(Image.batch_uid).subquery()
+
     statement = select(
-        Batch, Source, Location, RecordOwner, RecordType, RecordName, Project, Upload, OperatorUser, VendorUser
+        Batch, Source, Location, RecordOwner, RecordType, RecordName, Project, Upload, OperatorUser, VendorUser,
+        image_counts.c.actual_count
     ).join(Source, Batch.source_id == Source.source_id)\
      .join(Location, Batch.location_id == Location.location_id)\
      .join(RecordOwner, Batch.record_owner_id == RecordOwner.record_owner_id)\
@@ -581,12 +591,13 @@ def list_sup_batches(
      .join(VendorAllocation, ScanningOperatorAllocation.vendor_allocation_id == VendorAllocation.vendor_allocation_id)\
      .join(OperatorUser, ScanningOperatorAllocation.allocated_to_operator == OperatorUser.user_id)\
      .join(VendorUser, VendorAllocation.allocated_to_vendor == VendorUser.user_id)\
+     .outerjoin(image_counts, Batch.batch_uid == image_counts.c.batch_uid)\
      .order_by(Batch.created_date.desc())
     
     results = session.exec(statement).all()
     
     output = []
-    for b, s, l, ro, rt, rn, p, u, opt, vnd in results:
+    for b, s, l, ro, rt, rn, p, u, opt, vnd, actual_count in results:
         status = 'pending'
         if u:
             if u.upload_status == 'Completed':
@@ -610,7 +621,7 @@ def list_sup_batches(
             record_type_name=rt.record_type_name,
             book_name=rn.record_name,
             target_count=b.upload_count,
-            completed_count=u.completed_count if u else 0,
+            completed_count=actual_count or 0,
             vendor_name=vnd.name,
             operator_name=opt.name,
             upload_type=upload_type,

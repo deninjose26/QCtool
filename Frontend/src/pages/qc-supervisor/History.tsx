@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import PageHeader from '@/components/common/PageHeader';
 import { useAuth } from '@/contexts/AuthContext';
@@ -23,7 +23,9 @@ import {
     Book,
     X,
     Filter,
-    Building
+    Building,
+    Zap,
+    Loader2
 } from 'lucide-react';
 import { formatToLocalTime } from '@/utils/dateUtils';
 import { API_BASE_URL } from '@/config';
@@ -217,11 +219,15 @@ const QCSupervisorHistory: React.FC = () => {
                 data,
                 `Detailed_Report_${task.batch_id}`,
                 {
-                    image_name: 'Image Name',
-                    qc_status: 'QC Status',
+                    record_owner_name: 'Pandit Name',
+                    record_name: 'Bahi Name',
+                    location_name: 'Location',
+                    image_name: 'Image Number',
+                    qc_status: 'Status',
                     orientation_error: 'Orientation Issue',
                     remarks: 'Remarks / Rejection Reason',
-                    qc_date: 'QC Date'
+                    qc_date: 'Date',
+                    batch_id: 'Batch ID'
                 }
             );
         } catch (error) {
@@ -233,7 +239,79 @@ const QCSupervisorHistory: React.FC = () => {
         }
     };
 
-    const columns = [
+    const handleCombinedReport = async () => {
+        try {
+            // Build query params from current filters
+            const params = new URLSearchParams();
+            if (dateRange?.from) params.set('date_from', format(dateRange.from, 'yyyy-MM-dd'));
+            if (dateRange?.to) params.set('date_to', format(dateRange.to, 'yyyy-MM-dd'));
+
+            const res = await apiFetch(`${API_BASE_URL}/qc/export-combined-report?${params.toString()}`);
+            if (!res.ok) throw new Error('Failed to fetch combined report');
+            const data = await res.json();
+
+            if (data.length === 0) {
+                toast({ title: 'No Data', description: 'No QC records found for the selected filters.' });
+                return;
+            }
+
+            exportToExcel(
+                data,
+                'Combined_QC_Report',
+                {
+                    record_owner_name: 'Pandit Name',
+                    record_name: 'Bahi Name',
+                    location_name: 'Location',
+                    image_name: 'Image Number',
+                    qc_status: 'Status',
+                    orientation_error: 'Orientation Issue',
+                    remarks: 'Remarks',
+                    qc_date: 'Date',
+                    batch_id: 'Batch ID'
+                }
+            );
+        } catch (error) {
+            toast({ title: 'Error', description: 'Could not generate combined report', variant: 'destructive' });
+        }
+    };
+
+    const [isTriggering, setIsTriggering] = useState<string | null>(null);
+
+    const handleTriggerBatch = async (batchUid: string, batchId: string) => {
+        try {
+            setIsTriggering(batchUid);
+            const res = await apiFetch(`${API_BASE_URL}/admin/maintenance/trigger-batch/${batchUid}`, {
+                method: 'POST'
+            });
+
+            if (!res.ok) {
+                const errorData = await res.json().catch(() => ({}));
+                throw new Error(errorData.detail || 'Failed to trigger re-optimization');
+            }
+
+            const data = await res.json();
+            toast({
+                title: 'Optimization Triggered',
+                description: `Successfully queued ${batchId} for re-optimization.`,
+            });
+        } catch (err) {
+            console.error(err);
+            toast({
+                title: 'Trigger Failed',
+                description: err instanceof Error ? err.message : 'An error occurred',
+                variant: 'destructive'
+            });
+        } finally {
+            setIsTriggering(null);
+        }
+    };
+
+    const isRepairToolsEnabled = useMemo(() => {
+        return localStorage.getItem('admin_repair_tools_enabled') === 'true';
+    }, []);
+
+    const columns = useMemo(() => {
+        const baseColumns = [
         {
             key: 'batch_id',
             header: 'Batch ID',
@@ -341,7 +419,33 @@ const QCSupervisorHistory: React.FC = () => {
                 </div>
             )
         }
-    ];
+        ];
+
+        if (isRepairToolsEnabled) {
+            baseColumns.push({
+                key: 'repair_actions',
+                header: 'Repair',
+                render: (_: any, item: QCSupHistoryTask) => (
+                    <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleTriggerBatch(item.batch_uid, item.batch_id)}
+                        disabled={isTriggering === item.batch_uid}
+                        className="h-8 w-8 p-0 border-indigo-100 hover:bg-indigo-50 hover:text-indigo-600 transition-all"
+                        title="Repair Optimization (Re-convert)"
+                    >
+                        {isTriggering === item.batch_uid ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-500" />
+                        ) : (
+                            <Zap className="h-3.5 w-3.5" />
+                        )}
+                    </Button>
+                )
+            });
+        }
+
+        return baseColumns;
+    }, [isRepairToolsEnabled, isTriggering]);
 
     return (
         <div className="space-y-6 animate-fade-in pb-10">
@@ -359,6 +463,14 @@ const QCSupervisorHistory: React.FC = () => {
                     >
                         <Download className="h-4 w-4" />
                         Export Master Log
+                    </Button>
+
+                    <Button
+                        onClick={handleCombinedReport}
+                        className="bg-blue-600 hover:bg-blue-700 shadow-lg shadow-blue-600/20 gap-2 h-9"
+                    >
+                        <FileText className="h-4 w-4" />
+                        Combined Report
                     </Button>
 
                     <Button

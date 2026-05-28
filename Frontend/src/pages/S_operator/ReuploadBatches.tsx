@@ -31,7 +31,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Badge } from '@/components/ui/badge';
 import { API_BASE_URL } from '@/config';
 import { storeFilesInQueue, getPendingFiles, clearBatch } from '@/utils/uploadDB';
-import { UploadManager, syncWithServer } from '@/utils/uploadManager';
+import { UploadManager, syncWithServer } from '../../utils/uploadManager';
 import { useNetworkStatus } from '@/hooks/useNetworkStatus';
 import { useAuth } from '@/contexts/AuthContext';
 import {
@@ -101,7 +101,7 @@ const ReuploadBatches: React.FC = () => {
 
     const token = localStorage.getItem('qc_token');
     const headers = { 'Authorization': `Bearer ${token}` };
-    const { isOnline, wasOffline, reportNetworkFailure } = useNetworkStatus();
+    const { isOnline, wasOffline, reportNetworkFailure, reportNetworkSuccess } = useNetworkStatus();
 
     const fetchBatches = async () => {
         try {
@@ -109,6 +109,7 @@ const ReuploadBatches: React.FC = () => {
             if (!token) return;
 
             const res = await fetch(`${API_BASE_URL}/operator/batches`, { headers });
+            if (res.ok) reportNetworkSuccess();
             if (!res.ok) throw new Error('Failed to fetch batches');
 
             const data = await res.json();
@@ -129,13 +130,13 @@ const ReuploadBatches: React.FC = () => {
 
     useEffect(() => {
         // Reset global stop flag when component mounts
-        import('@/utils/uploadManager').then(m => m.UploadManager.resetGlobalStop());
+        import('../../utils/uploadManager').then(m => m.UploadManager.resetGlobalStop());
         fetchBatches();
 
         // Cleanup on unmount
         return () => {
             console.log('ReuploadBatches: Component unmounting - stopping uploads');
-            import('@/utils/uploadManager').then(m => m.UploadManager.stopAllInstances());
+            import('../../utils/uploadManager').then(m => m.UploadManager.stopAllInstances());
             if (uploadManagerRef.current) {
                 uploadManagerRef.current.destroy();
                 uploadManagerRef.current = null;
@@ -220,25 +221,31 @@ const ReuploadBatches: React.FC = () => {
             });
 
             // Reset global stop flag to ensure upload can proceed
-            const { UploadManager: UploadManagerClass } = await import('@/utils/uploadManager');
+            const { UploadManager: UploadManagerClass } = await import('../../utils/uploadManager');
             UploadManagerClass.resetGlobalStop();
 
-            const uploadManager = new UploadManagerClass(token, () => {
-                if (isUploading) {
-                    console.warn('⚡ [FAST-OFFLINE] Rework resume detected network failure');
-                    reportNetworkFailure();
+            const uploadManager = new UploadManagerClass(
+                token, 
+                () => {
+                    if (isUploading) {
+                        console.warn('⚡ [FAST-OFFLINE] Rework resume detected network failure');
+                        reportNetworkFailure();
+                    }
+                },
+                () => {
+                    reportNetworkSuccess();
                 }
-            });
+            );
             uploadManagerRef.current = uploadManager;
 
             // Extract file IDs from QueuedFile objects
-            const fileIds = filesToUpload.map(f => f.id).filter((id): id is number => id !== undefined);
+            const fileNames = filesToUpload.map(f => f.file_name);
 
             // Note: Resume won't work after page refresh for reuploads because we don't have
             // the actual File objects anymore. User will need to re-select the folder.
             uploadManager.processUploadQueue(
                 batchUid,
-                fileIds,
+                fileNames,
                 (fileProgress) => {
                     setCurrentFileName(fileProgress.fileName);
                     setUploadProgress(fileProgress.progress);
@@ -265,7 +272,7 @@ const ReuploadBatches: React.FC = () => {
                 },
                 (error) => {
                     console.error('Resume rework error:', error);
-                    toast({ title: 'Upload Error', description: error.message, variant: 'destructive' });
+                    toast({ title: 'Upload Error', description: String(error), variant: 'destructive' });
                 },
                 10 // concurrency
                 // filesArray is undefined here - resume won't work after page refresh
@@ -464,23 +471,29 @@ const ReuploadBatches: React.FC = () => {
             setIsSubmitting(false);
 
             // Reset global stop flag to ensure upload can proceed
-            const { UploadManager: UploadManagerClass } = await import('@/utils/uploadManager');
+            const { UploadManager: UploadManagerClass } = await import('../../utils/uploadManager');
             UploadManagerClass.resetGlobalStop();
 
-            const uploadManager = new UploadManagerClass(token, () => {
-                if (isUploading) {
-                    console.warn('⚡ [FAST-OFFLINE] Rework upload detected network failure');
-                    reportNetworkFailure();
+            const uploadManager = new UploadManagerClass(
+                token,
+                () => {
+                    if (isUploading) {
+                        console.warn('⚡ [FAST-OFFLINE] Rework upload detected network failure');
+                        reportNetworkFailure();
+                    }
+                },
+                () => {
+                    reportNetworkSuccess();
                 }
-            });
+            );
             uploadManagerRef.current = uploadManager;
 
             // Extract file IDs from QueuedFile objects
-            const fileIds = pendingFiles.map(f => f.id).filter((id): id is number => id !== undefined);
+            const fileNames = pendingFiles.map(f => f.file_name);
 
             uploadManager.processUploadQueue(
                 selectedBatch.batch_uid,
-                fileIds,
+                fileNames,
                 (fileProgress) => {
                     setCurrentFileName(fileProgress.fileName);
                     setUploadProgress(fileProgress.progress);
@@ -505,7 +518,7 @@ const ReuploadBatches: React.FC = () => {
                 },
                 (error) => {
                     console.error('Upload error:', error);
-                    toast({ title: 'Upload Error', description: error.message, variant: 'destructive' });
+                    toast({ title: 'Upload Error', description: String(error), variant: 'destructive' });
                 },
                 10, // concurrency
                 selectedFiles // Pass the actual File objects so upload manager can access them

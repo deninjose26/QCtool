@@ -15,7 +15,8 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { API_BASE_URL } from '@/config';
 import { db, storeFilesInQueue, getPendingFiles, clearBatch, getBatchStats, addToBatchQueue, getQueueCount, getActiveBatch, getNextBatchInQueue, updateBatchStatus, getBatchesWithPendingUploads } from '@/utils/uploadDB';
-import { UploadManager, syncWithServer } from '@/utils/uploadManager';
+import { UploadManager, syncWithServer } from '../../utils/uploadManager';
+import { validateTiffHeaders } from '@/utils/tiffValidator';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNetworkStatus } from '@/hooks/useNetworkStatus';
 import {
@@ -71,6 +72,8 @@ const Upload: React.FC = () => {
   const [preparationProgress, setPreparationProgress] = useState(0);
   const [duplicateFileNames, setDuplicateFileNames] = useState<{ name: string; count: number }[]>([]);
   const [corruptedFileNames, setCorruptedFileNames] = useState<{ name: string; size: number }[]>([]);
+  const [invalidTiffHeaders, setInvalidTiffHeaders] = useState<string[]>([]);
+  const [accumulatedFiles, setAccumulatedFiles] = useState<Map<string, File>>(new Map());
 
   // Upload Progress State
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -104,7 +107,7 @@ const Upload: React.FC = () => {
 
   const token = localStorage.getItem('qc_token');
   const headers = { 'Authorization': `Bearer ${token}` };
-  const { isOnline, wasOffline, reportNetworkFailure } = useNetworkStatus();
+  const { isOnline, wasOffline, reportNetworkFailure, reportNetworkSuccess } = useNetworkStatus();
 
   // Store file references for on-demand upload
   const fileMapRef = useRef<Map<string, { files: File[], handle?: any }>>(new Map());
@@ -172,6 +175,7 @@ const Upload: React.FC = () => {
       }
 
       const res = await fetch(`${API_BASE_URL}/operator/batches`, { headers });
+      if (res.ok) reportNetworkSuccess();
 
       // Handle 401 Unauthorized
       if (res.status === 401) {
@@ -340,7 +344,7 @@ const Upload: React.FC = () => {
   // CRITICAL: Cleanup // Track component mount status for async safety
   useEffect(() => {
     // 🔓 Reset global stop when component mounts
-    import('@/utils/uploadManager').then(m => m.UploadManager.resetGlobalStop());
+    import('../../utils/uploadManager').then(m => m.UploadManager.resetGlobalStop());
 
     isMounted.current = true;
     return () => {
@@ -348,7 +352,7 @@ const Upload: React.FC = () => {
       console.log('Sweep: Upload component unmounting - Cleaning up...');
 
       // 🛑 TRIGGER GLOBAL STOP
-      import('@/utils/uploadManager').then(m => m.UploadManager.stopAllInstances());
+      import('../../utils/uploadManager').then(m => m.UploadManager.stopAllInstances());
 
       // DESTROY uploads permanently (not just pause)
       if (uploadManagerRef.current) {
@@ -499,20 +503,53 @@ const Upload: React.FC = () => {
           description: 'Computer will stay awake until uploads complete',
         });
 
-        // Listen for wake lock release
         wakeLockRef.current.addEventListener('release', () => {
           console.log('✅ Wake Lock released');
         });
 
+        // Re-acquire Wake Lock when tab becomes visible again
+        // Browsers release Wake Lock when tab goes to background
+        const handleVisibilityChange = () => {
+          if (document.visibilityState === 'visible' && isUploading && !wakeLockRef.current) {
+            (navigator as any).wakeLock.request('screen').then((lock: any) => {
+              wakeLockRef.current = lock;
+              console.log('🔒 Wake Lock re-acquired after tab focus');
+            }).catch(() => {});
+          }
+        };
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        // Store cleanup ref
+        (wakeLockRef as any)._visCleanup = () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+
         setShowSleepWarning(false);
       } else {
-        // Wake Lock not supported - show manual warning
         console.warn('⚠️ Wake Lock API not supported');
         setShowSleepWarning(true);
       }
     } catch (err) {
       console.error('Wake Lock request failed:', err);
       setShowSleepWarning(true);
+    }
+
+    // Web Locks API: Signal to browser that this tab is doing critical work
+    // Reduces aggressive background tab throttling
+    if ('locks' in navigator) {
+      try {
+        (navigator as any).locks.request('qctool-active-upload', { mode: 'exclusive' }, async () => {
+          // Hold the lock until uploads complete
+          return new Promise<void>((resolve) => {
+            const checkInterval = setInterval(() => {
+              if (!isUploading) {
+                clearInterval(checkInterval);
+                resolve();
+              }
+            }, 5000);
+          });
+        });
+        console.log('🔐 Web Lock acquired for background upload protection');
+      } catch (err) {
+        console.warn('Web Locks API not available:', err);
+      }
     }
   };
 
@@ -522,6 +559,11 @@ const Upload: React.FC = () => {
   const releaseWakeLock = async () => {
     if (wakeLockRef.current) {
       try {
+        // Clean up visibility change listener
+        if ((wakeLockRef as any)._visCleanup) {
+          (wakeLockRef as any)._visCleanup();
+          (wakeLockRef as any)._visCleanup = null;
+        }
         await wakeLockRef.current.release();
         wakeLockRef.current = null;
         console.log('✅ Wake Lock released - Computer can sleep normally');
@@ -673,6 +715,12 @@ const Upload: React.FC = () => {
   const processNextBatchInQueue = async (manualRestart: boolean = false) => {
     // 🛡️ Kill switch check
     if (!isMounted.current) return;
+
+    // If user explicitly paused, don't auto-restart the queue
+    if (isPaused && !manualRestart) {
+      console.log('⏸️ Queue processing skipped - user paused uploads');
+      return;
+    }
 
     // Don't start a new upload if one is already running (unless it's paused and we're resuming)
     if (isUploading && !isPaused && !manualRestart) {
@@ -837,13 +885,20 @@ const Upload: React.FC = () => {
       }
 
       console.log('🔥 Initializing UploadManager...');
-      const uploadManager = new UploadManager(token!, () => {
-        // FAST OFFLINE DETECTION CALLBACK
-        if (isUploading && !isPaused) {
-          console.warn('⚡ [FAST-OFFLINE] Network failure detected by UploadManager. Triggering hook...');
-          reportNetworkFailure(); // EXPLICITLY TELL THE HOOK WE ARE DOWN
+      const uploadManager = new UploadManager(
+        token!,
+        () => {
+          // FAST OFFLINE DETECTION CALLBACK
+          if (isUploading && !isPaused) {
+            console.warn('⚡ [FAST-OFFLINE] Network failure detected by UploadManager. Triggering hook...');
+            reportNetworkFailure();
+          }
+        },
+        () => {
+          // PASSIVE ONLINE DETECTION CALLBACK
+          reportNetworkSuccess();
         }
-      });
+      );
       uploadManagerRef.current = uploadManager;
 
       // Start a Background Sync Poller to keep UI in lockstep with S3
@@ -853,6 +908,7 @@ const Upload: React.FC = () => {
 
         try {
           const currentUploaded = await syncWithServer(batchUid, token!);
+          reportNetworkSuccess(); // Passively confirm network
           const currentCount = currentUploaded.length;
 
           setBatches(prev => prev.map(b => {
@@ -869,7 +925,46 @@ const Upload: React.FC = () => {
       syncIntervalRef.current = syncInterval;
 
       // Get files from memory if available
-      const fileData = fileMapRef.current.get(batchUid);
+      let fileData = fileMapRef.current.get(batchUid);
+
+      // 🛡️ RECOVERY: If memory is empty but we have a handle, re-resolve files automatically
+      if (!fileData && batchToProcess.directory_handle) {
+        console.log('🔄 Re-resolving files from persistent handle...');
+        try {
+          const files: File[] = [];
+          const scanDirectory = async (directoryHandle: any) => {
+            for await (const entry of directoryHandle.values()) {
+              if (entry.kind === 'file') {
+                const file = await entry.getFile();
+                if (file.name.toLowerCase().endsWith('.tif') || file.name.toLowerCase().endsWith('.tiff')) {
+                  files.push(file);
+                }
+              } else if (entry.kind === 'directory') {
+                await scanDirectory(entry);
+              }
+            }
+          };
+          await scanDirectory(batchToProcess.directory_handle);
+          fileMapRef.current.set(batchUid, { files, handle: batchToProcess.directory_handle });
+          fileData = { files, handle: batchToProcess.directory_handle };
+          console.log(`✅ Successfully re-resolved ${files.length} files.`);
+        } catch (e) {
+          console.error('Failed to auto-resolve handle:', e);
+          // If we fail here, the permission might have expired actually
+          setPermissionNeededUid(batchUid);
+          setIsUploading(false);
+          setActiveUploadUid(null);
+          return;
+        }
+      }
+      if (!fileData) {
+        console.warn(`⚠️ [Queue] No file data available for batch ${batchUid}. Requesting folder selection.`);
+        // Triggers the "Reconnect" UI which allows the user to re-select the folder
+        setPermissionNeededUid(batchUid);
+        setIsUploading(false);
+        setActiveUploadUid(null);
+        return;
+      }
 
       uploadManager.processUploadQueue(
         batchUid,
@@ -905,10 +1000,10 @@ const Upload: React.FC = () => {
             syncIntervalRef.current = null;
           }
           // Final verification check with server
-          const { syncWithServer } = await import('@/utils/uploadManager');
+          const { syncWithServer } = await import('../../utils/uploadManager');
           const { getPendingFiles, getQueuedFiles, updateFileStatus } = await import('@/utils/uploadDB');
 
-          let uploadedOnServer = await syncWithServer(batchUid, token!);
+          const uploadedOnServer = await syncWithServer(batchUid, token!);
           const serverSet = new Set(uploadedOnServer);
           const targetCount = batchData?.target_count || 0;
 
@@ -1009,11 +1104,11 @@ const Upload: React.FC = () => {
             });
           } catch (e) { /* ignore */ }
 
-          toast({ title: 'Upload Error', description: error.message, variant: 'destructive' });
+          toast({ title: 'Upload Error', description: errorMsg || 'Unknown error', variant: 'destructive' });
           setIsUploading(false);
           setActiveUploadUid(null);
         },
-        8, // MAX CONCURRENCY - Increased to 8 for faster uploads (safe balance for modern browsers)
+        25, // MAX CONCURRENCY - Increased to 25 for maximum parallel upload speed
         fileData?.files // Pass files array for instant access
       );
 
@@ -1049,6 +1144,8 @@ const Upload: React.FC = () => {
     setInvalidFileNames([]);
     setDuplicateFileNames([]);
     setCorruptedFileNames([]);
+    setInvalidTiffHeaders([]);
+    setAccumulatedFiles(new Map());
     setIsDialogOpen(true);
 
     if (batch.is_reupload) {
@@ -1118,30 +1215,58 @@ const Upload: React.FC = () => {
       return;
     }
 
-    if (selectedBatch && imageFiles.length !== selectedBatch.target_count) {
-      toast({
-        title: 'Validation Error',
-        description: `Selected folder has ${imageFiles.length} TIFF images, but exactly ${selectedBatch.target_count} images are required for this batch.`,
-        variant: 'destructive',
-      });
+    // TIFF header validation - catch corrupted files that pass extension/size checks
+    const { valid: headerValid, invalid: headerInvalid } = await validateTiffHeaders(imageFiles);
+    if (headerInvalid.length > 0) {
+      setInvalidTiffHeaders(headerInvalid);
+      setSelectedFiles([]);
+      e.target.value = '';
       return;
     }
 
-    // New Filename Validation for Rework
+    // Accumulative file selection: allow ALL images in a book at once (no per-pick limit)
+    // Upper bound is target_count for the batch (checked below)
+    const newAccumulated = new Map(accumulatedFiles);
+    for (const file of headerValid) {
+      newAccumulated.set(file.name, file);
+    }
+
+    // Check total doesn't exceed target_count
+    if (selectedBatch && newAccumulated.size > selectedBatch.target_count) {
+      toast({
+        title: 'Too Many Files',
+        description: `Total selected: ${newAccumulated.size}, but batch requires exactly ${selectedBatch.target_count} images. Remove some files or start fresh.`,
+        variant: 'destructive',
+      });
+      e.target.value = '';
+      return;
+    }
+
+    // Rework file validation
     if (selectedBatch?.is_reupload && rejectedNames.length > 0) {
       const rejectedSet = new Set(rejectedNames);
-      const invalidFiles = imageFiles.filter(f => !rejectedSet.has(f.name));
+      const invalidFiles = headerValid.filter(f => !rejectedSet.has(f.name));
       if (invalidFiles.length > 0) {
         setInvalidFileNames(invalidFiles.map(f => f.name));
         setSelectedFiles([]);
+        e.target.value = '';
         return;
       }
     }
 
+    setAccumulatedFiles(newAccumulated);
     setInvalidFileNames([]);
     setCorruptedFileNames([]);
-    setSelectedFiles(imageFiles);
-    // Clear input so same folder can be re-selected if needed
+    setInvalidTiffHeaders([]);
+    setSelectedFiles(Array.from(newAccumulated.values()));
+
+    if (selectedBatch && newAccumulated.size < selectedBatch.target_count) {
+      toast({
+        title: `${newAccumulated.size} of ${selectedBatch.target_count} files selected`,
+        description: 'You can select more files to reach the required count.',
+      });
+    }
+
     e.target.value = '';
   };
 
@@ -1216,22 +1341,47 @@ const Upload: React.FC = () => {
         return;
       }
 
-      if (selectedBatch && files.length !== selectedBatch.target_count) {
+      // TIFF header validation
+      const { valid: headerValid, invalid: headerInvalid } = await validateTiffHeaders(files);
+      if (headerInvalid.length > 0) {
+        setInvalidTiffHeaders(headerInvalid);
+        setSelectedFiles([]);
+        setIsBrowsingFolder(false);
+        return;
+      }
+
+      // Accumulative selection - allow ALL files in a book at once
+      const newAccumulated = new Map(accumulatedFiles);
+      for (const file of headerValid) {
+        newAccumulated.set(file.name, file);
+      }
+
+      if (selectedBatch && newAccumulated.size > selectedBatch.target_count) {
         toast({
-          title: 'Validation Error',
-          description: `Selected folder has ${files.length} TIFF images, but exactly ${selectedBatch.target_count} images are required.`,
+          title: 'Too Many Files',
+          description: `Total: ${newAccumulated.size}, but batch requires ${selectedBatch.target_count}.`,
           variant: 'destructive',
         });
+        setIsBrowsingFolder(false);
         return;
       }
 
       // Store handle for persistence
       (window as any)._lastHandle = handle;
 
+      setAccumulatedFiles(newAccumulated);
       setInvalidFileNames([]);
       setDuplicateFileNames([]);
       setCorruptedFileNames([]);
-      setSelectedFiles(files);
+      setInvalidTiffHeaders([]);
+      setSelectedFiles(Array.from(newAccumulated.values()));
+
+      if (selectedBatch && newAccumulated.size < selectedBatch.target_count) {
+        toast({
+          title: `${newAccumulated.size} of ${selectedBatch.target_count} files selected`,
+          description: 'Select another folder to add more files.',
+        });
+      }
     } catch (err: any) {
       setIsBrowsingFolder(false); // Reset loading state
       if (err.name !== 'AbortError') {
@@ -1246,9 +1396,9 @@ const Upload: React.FC = () => {
 
     try {
       setIsSubmitting(true);
-      // Check max queue limit (5 for Normal, 10 for Re-upload)
+      // Check max queue limit (30 for Normal: 29 queued + 1 processing, 40 for Re-upload)
       const currentQueueSize = await getQueueCount(user!.id);
-      const maxLimit = selectedBatch.is_reupload ? 10 : 5;
+      const maxLimit = selectedBatch.is_reupload ? 40 : 30;
 
       if (currentQueueSize >= maxLimit) {
         toast({
@@ -1396,49 +1546,39 @@ const Upload: React.FC = () => {
     }
   }, [isOnline, isUploading]);
 
-  // Auto-resume on network restore
+  // Auto-resume on network restore or manual reconnection
   useEffect(() => {
-    // Don't auto-resume if user is not logged in
     if (!token) return;
 
-    if (wasOffline && isOnline && isPaused && uploadManagerRef.current) {
-      console.log('🔄 Network restored - Waiting for connection to stabilize...');
+    // If we are online but still showing as "Paused" during an active upload, auto-resume
+    if (isOnline && isPaused && isUploading && uploadManagerRef.current) {
+      console.log('🔄 Online & Paused - Auto-resuming...');
 
-      // Wait 1 second for network to fully stabilize
       const resumeTimer = setTimeout(async () => {
         try {
-          console.log('🔄 Network stable - Resuming uploads...');
-
-          uploadManagerRef.current?.resume();
-          setIsPaused(false);
-          // Destroy the old instance if it exists before starting fresh via processNextBatch
+          // If we've recovered, the old manager might be stale
           if (uploadManagerRef.current) {
-            uploadManagerRef.current.destroy();
+            uploadManagerRef.current.resume();
           }
-
-          // Stop alert sound
+          
+          setIsPaused(false);
           stopNetworkLostAlert();
 
           toast({
-            title: 'Network Restored',
-            description: 'Resuming upload...',
+            title: 'Connection Restored',
+            description: 'Resuming your upload automatically.',
           });
 
-          // CRITICAL: Restart the upload process
+          // Ensure the queue processing loop is active
           await processNextBatchInQueue();
         } catch (error) {
-          console.error('❌ Failed to resume upload:', error);
-          toast({
-            title: 'Resume Failed',
-            description: 'Please click Continue to resume manually.',
-            variant: 'destructive'
-          });
+          console.error('❌ Auto-resume failed:', error);
         }
       }, 1000);
 
       return () => clearTimeout(resumeTimer);
     }
-  }, [wasOffline, isOnline, isPaused, token, processNextBatchInQueue]);
+  }, [isOnline, isPaused, isUploading, token]);
 
   useEffect(() => {
     if (token && user?.id) {
@@ -1537,16 +1677,16 @@ const Upload: React.FC = () => {
         const isCurrentActive = activeUploadUid === item.batch_uid;
         const isActivelyUploading = isUploading && isCurrentActive && !isPaused;
         const isCurrentlyPaused = isUploading && isCurrentActive && isPaused;
-        const isQueued = !isCurrentActive && queuedBatchUids.includes(item.batch_uid);
+        const isQueued = isUploading && activeUploadUid !== null && activeUploadUid !== item.batch_uid && queuedBatchUids.includes(item.batch_uid);
 
         // Lock Logic:
         const currentDeviceId = getDeviceId();
         const isLockedByAnotherDevice = item.is_locked && item.locked_device_id !== currentDeviceId;
 
         // Disable logic: 
-        // 1. Queue is full (5 Normal / 10 Re-upload)
+        // 1. Queue is full (30 Normal / 40 Re-upload)
         // 2. Type Mismatch (Normal vs Re-upload)
-        const isQueueFull = queueCount >= (item.is_reupload ? 10 : 5);
+        const isQueueFull = queueCount >= (item.is_reupload ? 40 : 30);
         const isTypeMismatch = activeQueueIsReupload !== null && activeQueueIsReupload !== item.is_reupload;
 
         const isGlobalBlocked = (isQueueFull || isTypeMismatch) && !isQueued && !isCurrentActive;
@@ -1644,7 +1784,7 @@ const Upload: React.FC = () => {
               // DISABLE BUTTON IF OFFLINE (unless already uploading/retrying)
               disabled={isGlobalBlocked || (!isOnline && !isActivelyUploading)}
               className={`h-8 gap-2 transition-all duration-300 min-w-[100px] ${isActivelyUploading
-                ? 'bg-primary/40 cursor-not-allowed text-white'
+                ? 'bg-rose-500 hover:bg-rose-600 text-white shadow-md'
                 : (isCurrentlyPaused || permissionNeededUid === item.batch_uid)
                   ? 'bg-amber-500 hover:bg-amber-600 animate-pulse text-white shadow-md'
                   : 'bg-primary hover:bg-primary/90 shadow-sm'
@@ -1652,8 +1792,8 @@ const Upload: React.FC = () => {
             >
               {isActivelyUploading ? (
                 <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  <span className="animate-pulse">Uploading...</span>
+                  <Pause className="h-4 w-4" />
+                  <span>Pause</span>
                 </>
               ) : !isOnline ? (
                 <>
@@ -1835,7 +1975,7 @@ const Upload: React.FC = () => {
               {queueCount > 0 && (
                 <div className="flex items-center gap-2 text-xs font-bold text-amber-600 bg-amber-50 px-3 py-1.5 rounded-full border border-amber-200 animate-pulse">
                   <ListFilter className="h-3 w-3" />
-                  Queue: {queueCount}/{activeQueueIsReupload ? 10 : 5}
+                  Queue: {queueCount}/{activeQueueIsReupload ? 40 : 30}
                 </div>
               )}
               <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground bg-muted/30 px-3 py-1.5 rounded-full border">

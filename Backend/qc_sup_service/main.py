@@ -590,6 +590,14 @@ def get_allocation_history(
 
     from common.models import ScanningOperatorAllocation, VendorAllocation
 
+    from sqlalchemy import case, func
+    qc_stats = select(
+        QC.qc_allocation_id,
+        func.sum(case((QC.qc_status != QCStatus.Pending, 1), else_=0)).label("done_count"),
+        func.sum(case((QC.qc_status == QCStatus.Approved, 1), else_=0)).label("accepted_count"),
+        func.sum(case((QC.qc_status == QCStatus.Rejected, 1), else_=0)).label("rejected_count")
+    ).group_by(QC.qc_allocation_id).subquery()
+
     statement = (
         select(
             QCAllocation,
@@ -602,7 +610,8 @@ def get_allocation_history(
             RecordName.record_name,
             VendorUser.name.label("vendor_name"),
             QCUser.name.label("qc_user_name"),
-            SupervisorUser.name.label("supervisor_name")
+            SupervisorUser.name.label("supervisor_name"),
+            qc_stats.c.done_count, qc_stats.c.accepted_count, qc_stats.c.rejected_count
         )
         .join(Batch, QCAllocation.batch_uid == Batch.batch_uid)
         .join(Source, Batch.source_id == Source.source_id)
@@ -616,30 +625,17 @@ def get_allocation_history(
         .join(VendorUser, VendorAllocation.allocated_to_vendor == VendorUser.user_id)
         .join(QCUser, QCAllocation.allocated_to_qc_user == QCUser.user_id)
         .join(SupervisorUser, QCAllocation.allocated_by_supervisor == SupervisorUser.user_id)
+        .outerjoin(qc_stats, QCAllocation.qc_allocation_id == qc_stats.c.qc_allocation_id)
         .order_by(QCAllocation.allocation_date.desc())
     )
     
     results = session.exec(statement).all()
     
     history = []
-    for qca, batch, proj, src, loc, owner, rtype, rname, vendor_name, qc_user_name, sup_name in results:
-        qc_done = session.exec(
-            select(func.count(QC.qc_id))
-            .where(QC.qc_allocation_id == qca.qc_allocation_id)
-            .where(QC.qc_status != QCStatus.Pending)
-        ).first() or 0
-
-        accepted = session.exec(
-            select(func.count(QC.qc_id))
-            .where(QC.qc_allocation_id == qca.qc_allocation_id)
-            .where(QC.qc_status == QCStatus.Approved)
-        ).first() or 0
-
-        rejected = session.exec(
-            select(func.count(QC.qc_id))
-            .where(QC.qc_allocation_id == qca.qc_allocation_id)
-            .where(QC.qc_status == QCStatus.Rejected)
-        ).first() or 0
+    for qca, batch, proj, src, loc, owner, rtype, rname, vname, qc_user_name, sup_name, qc_done, accepted, rejected in results:
+        qc_done = qc_done or 0
+        accepted = accepted or 0
+        rejected = rejected or 0
 
         up_type = "Complete"
         if batch.is_reupload:

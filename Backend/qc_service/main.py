@@ -87,6 +87,12 @@ def get_my_tasks(
     if current_user.user_role not in [UserRole.QC_User, UserRole.QC_Supervisor, UserRole.Upload_Supervisor]:
         raise HTTPException(status_code=403, detail="Access denied.")
 
+    from sqlalchemy import case, func
+    qc_stats = select(
+        QC.qc_allocation_id,
+        func.count(QC.qc_id).filter(QC.qc_status != QCStatus.Pending).label("done_count")
+    ).group_by(QC.qc_allocation_id).subquery()
+
     statement = (
         select(
             QCAllocation,
@@ -96,7 +102,8 @@ def get_my_tasks(
             Location.location_name,
             RecordOwner.record_owner_name,
             RecordType.record_type_name,
-            RecordName.record_name
+            RecordName.record_name,
+            qc_stats.c.done_count
         )
         .join(Batch, QCAllocation.batch_uid == Batch.batch_uid)
         .join(Source, Batch.source_id == Source.source_id)
@@ -105,6 +112,7 @@ def get_my_tasks(
         .join(RecordOwner, Batch.record_owner_id == RecordOwner.record_owner_id)
         .join(RecordType, Batch.record_type_id == RecordType.record_type_id)
         .join(RecordName, Batch.record_name_id == RecordName.record_name_id)
+        .outerjoin(qc_stats, QCAllocation.qc_allocation_id == qc_stats.c.qc_allocation_id)
         .where(QCAllocation.allocated_to_qc_user == current_user.user_id)
         .where(QCAllocation.qc_batch_status.in_([QCBatchStatus.Allocated, QCBatchStatus.QC_Pending, QCBatchStatus.QC_In_Progress]))
         .order_by(QCAllocation.allocation_date.desc())
@@ -113,13 +121,7 @@ def get_my_tasks(
     results = session.exec(statement).all()
     
     tasks = []
-    for qca, batch, proj, src, loc, owner, rtype, rname in results:
-        qc_done = session.exec(
-            select(func.count(QC.qc_id))
-            .where(QC.qc_allocation_id == qca.qc_allocation_id)
-            .where(QC.qc_status != QCStatus.Pending)
-        ).first() or 0
-
+    for qca, batch, proj, src, loc, owner, rtype, rname, qc_done in results:
         tasks.append(QCUserTask(
             qc_allocation_id=qca.qc_allocation_id,
             batch_uid=batch.batch_uid,
@@ -132,7 +134,7 @@ def get_my_tasks(
             book_name=rname,
             total_count=batch.total_count,
             upload_count=batch.upload_count,
-            qc_done_count=qc_done,
+            qc_done_count=qc_done or 0,
             accepted_count=0, # Not strictly needed for tasks but satisfies schema
             rejected_count=0,
             allocation_date=qca.allocation_date,
@@ -152,6 +154,14 @@ def get_my_history(
     if current_user.user_role not in [UserRole.QC_User, UserRole.QC_Supervisor, UserRole.Upload_Supervisor]:
         raise HTTPException(status_code=403, detail="Access denied.")
 
+    from sqlalchemy import case, func
+    qc_stats = select(
+        QC.qc_allocation_id,
+        func.sum(case((QC.qc_status != QCStatus.Pending, 1), else_=0)).label("done_count"),
+        func.sum(case((QC.qc_status == QCStatus.Approved, 1), else_=0)).label("accepted_count"),
+        func.sum(case((QC.qc_status == QCStatus.Rejected, 1), else_=0)).label("rejected_count")
+    ).group_by(QC.qc_allocation_id).subquery()
+
     statement = (
         select(
             QCAllocation,
@@ -161,7 +171,8 @@ def get_my_history(
             Location.location_name,
             RecordOwner.record_owner_name,
             RecordType.record_type_name,
-            RecordName.record_name
+            RecordName.record_name,
+            qc_stats.c.done_count, qc_stats.c.accepted_count, qc_stats.c.rejected_count
         )
         .join(Batch, QCAllocation.batch_uid == Batch.batch_uid)
         .join(Source, Batch.source_id == Source.source_id)
@@ -170,6 +181,7 @@ def get_my_history(
         .join(RecordOwner, Batch.record_owner_id == RecordOwner.record_owner_id)
         .join(RecordType, Batch.record_type_id == RecordType.record_type_id)
         .join(RecordName, Batch.record_name_id == RecordName.record_name_id)
+        .outerjoin(qc_stats, QCAllocation.qc_allocation_id == qc_stats.c.qc_allocation_id)
         .where(QCAllocation.allocated_to_qc_user == current_user.user_id)
         .where(QCAllocation.qc_batch_status.in_([
             QCBatchStatus.Completed, 
@@ -182,24 +194,10 @@ def get_my_history(
     results = session.exec(statement).all()
     
     history = []
-    for qca, batch, proj, src, loc, owner, rtype, rname in results:
-        qc_done = session.exec(
-            select(func.count(QC.qc_id))
-            .where(QC.qc_allocation_id == qca.qc_allocation_id)
-            .where(QC.qc_status != QCStatus.Pending)
-        ).first() or 0
-
-        accepted = session.exec(
-            select(func.count(QC.qc_id))
-            .where(QC.qc_allocation_id == qca.qc_allocation_id)
-            .where(QC.qc_status == QCStatus.Approved)
-        ).first() or 0
-
-        rejected = session.exec(
-            select(func.count(QC.qc_id))
-            .where(QC.qc_allocation_id == qca.qc_allocation_id)
-            .where(QC.qc_status == QCStatus.Rejected)
-        ).first() or 0
+    for qca, batch, proj, src, loc, owner, rtype, rname, qc_done, accepted, rejected in results:
+        qc_done = qc_done or 0
+        accepted = accepted or 0
+        rejected = rejected or 0
 
         history.append(QCUserTask(
             qc_allocation_id=qca.qc_allocation_id,
@@ -562,23 +560,133 @@ def export_batch_details(
     
     results = session.exec(statement).all()
     
+    # Fetch batch metadata for enriched export (Pandit Name, Bahi Name, Location)
+    batch_info = {}
+    if curr_batch:
+        record_owner = session.get(RecordOwner, curr_batch.record_owner_id)
+        record_name = session.get(RecordName, curr_batch.record_name_id)
+        location = session.get(Location, curr_batch.location_id)
+        batch_info = {
+            "record_owner_name": record_owner.record_owner_name if record_owner else "",
+            "record_name": record_name.record_name if record_name else "",
+            "location_name": location.location_name if location else "",
+            "batch_id": curr_batch.batch_id
+        }
+
     export_data = []
-    seen_images = set() # Ensure we don't duplicate if image names are same across versions
-    
+    seen_images = set()
+
     for qc, img in results:
         if img.image_name in seen_images:
             continue
-        
+
         export_data.append({
+            "record_owner_name": batch_info.get("record_owner_name", ""),
+            "record_name": batch_info.get("record_name", ""),
+            "location_name": batch_info.get("location_name", ""),
             "image_name": img.image_name,
             "qc_status": qc.qc_status,
             "orientation_error": "Yes" if qc.orientation_error else "No",
             "remarks": qc.remarks or "",
-            "qc_date": qc.qc_date.strftime("%Y-%m-%d %H:%M:%S") if qc.qc_date else ""
+            "qc_date": qc.qc_date.strftime("%Y-%m-%d %H:%M:%S") if qc.qc_date else "",
+            "batch_id": batch_info.get("batch_id", "")
         })
         seen_images.add(img.image_name)
-    
-    # Optional: Sort back to name order for the final list
+
     export_data.sort(key=lambda x: x['image_name'])
-    
+
     return export_data
+
+@router.get("/export-combined-report")
+def export_combined_report(
+    record_owner_ids: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    project_id: Optional[UUID] = None,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Combined CSV/Excel export across multiple pandits/batches.
+    Includes: Pandit Name, Bahi Name, Location, Image Number, Status, Date.
+    """
+    # Access control
+    if current_user.user_role not in [UserRole.QC_Supervisor, UserRole.SuperAdmin, UserRole.Upload_Supervisor]:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Build base query: QC -> Image -> QCAllocation -> Batch -> RecordOwner, RecordName, Location
+    statement = (
+        select(QC, Image, Batch, RecordOwner, RecordName, Location)
+        .join(Image, QC.image_id == Image.image_id)
+        .join(QCAllocation, QC.qc_allocation_id == QCAllocation.qc_allocation_id)
+        .join(Batch, QCAllocation.batch_uid == Batch.batch_uid)
+        .join(RecordOwner, Batch.record_owner_id == RecordOwner.record_owner_id)
+        .join(RecordName, Batch.record_name_id == RecordName.record_name_id)
+        .join(Location, Batch.location_id == Location.location_id)
+    )
+
+    # Filter by record owners (pandits)
+    if record_owner_ids:
+        try:
+            owner_uuids = [UUID(uid.strip()) for uid in record_owner_ids.split(",") if uid.strip()]
+            if owner_uuids:
+                statement = statement.where(Batch.record_owner_id.in_(owner_uuids))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid record_owner_ids format")
+
+    # Filter by date range
+    if date_from:
+        try:
+            from_date = datetime.strptime(date_from, "%Y-%m-%d")
+            statement = statement.where(QC.qc_date >= from_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date_from format (use YYYY-MM-DD)")
+
+    if date_to:
+        try:
+            to_date = datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+            statement = statement.where(QC.qc_date <= to_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date_to format (use YYYY-MM-DD)")
+
+    # Filter by project
+    if project_id:
+        statement = statement.where(Batch.source_id.in_(
+            select(Source.source_id).where(Source.project_id == project_id)
+        ))
+
+    statement = statement.order_by(RecordOwner.record_owner_name, RecordName.record_name, Image.image_name)
+
+    results = session.exec(statement).all()
+
+    export_data = []
+    for qc, img, batch, owner, rec_name, loc in results:
+        export_data.append({
+            "record_owner_name": owner.record_owner_name,
+            "record_name": rec_name.record_name,
+            "location_name": loc.location_name,
+            "image_name": img.image_name,
+            "qc_status": qc.qc_status,
+            "orientation_error": "Yes" if qc.orientation_error else "No",
+            "remarks": qc.remarks or "",
+            "qc_date": qc.qc_date.strftime("%Y-%m-%d %H:%M:%S") if qc.qc_date else "",
+            "batch_id": batch.batch_id
+        })
+
+    return export_data
+
+@router.get("/record-owners")
+def get_record_owners_for_export(
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Get list of record owners (pandits) for combined report filter."""
+    if current_user.user_role not in [UserRole.QC_Supervisor, UserRole.SuperAdmin, UserRole.Upload_Supervisor]:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    owners = session.exec(
+        select(RecordOwner.record_owner_id, RecordOwner.record_owner_name)
+        .distinct()
+    ).all()
+
+    return [{"record_owner_id": str(o[0]), "record_owner_name": o[1]} for o in owners]
